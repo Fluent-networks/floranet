@@ -23,19 +23,10 @@ FloraNet was built using Python 2.7 and has been tested on Mac OS X and Ubuntu L
 
 ### Prerequisites
 * Python 2.7
-* CryptoPlus 1.0
-
-Install CryptoPlus:
-
-```
-$ git clone https://github.com/doegox/python-cryptoplus.git
-$ cd python-pycryptoplus && sudo python setup.py install
-```
-
 
 ### Installation
 
-Clone the repository:
+Clone the repository
 
 ```
 $ git clone https://github.com/Fluent-networks/floranet.git

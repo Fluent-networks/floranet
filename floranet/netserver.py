@@ -1,6 +1,4 @@
-
 import struct
-import copy
 import imp
 import os
 import time
@@ -8,6 +6,8 @@ import time
 from twisted.internet import reactor, task, protocol
 from twisted.internet.error import CannotListenError
 from twisted.internet.defer import inlineCallbacks, returnValue
+from twisted.enterprise import adbapi
+from twistar.registry import Registry
 
 from lora_gateway import LoraInterface, GatewayMessage, Txpk
 from lora_mac import MACMessage, MACDataDownlinkMessage, JoinAcceptMessage
@@ -42,20 +42,15 @@ class NetServer(protocol.DatagramProtocol):
         log.info("Initialising the server")
         self.config = config
         self.protocol = {'lora': LoraInterface(self)}
-        self.ota_devices = []
-        self.abp_devices = []
         self.message_cache = []
+        self.otarange = set(xrange(self.config.otaastart, self.config.otaaend + 1))
         self.task = {}
-        for d in self.config.abpdevices:
-            (devaddr, appeui, nwkskey, appskey) = (d[0], d[1], d[2], d[3])
-            device = Device(devaddr=devaddr, appeui=appeui,
-                            nwkskey=nwkskey, appskey=appskey)
-            self.abp_devices.append(device)
-        if self.config.freqband == 'AU915':
-            self.band = AU915()
-        elif self.config.freqband == 'US915':
-            self.band = US915()
+        self.band = eval(self.config.freqband)()
+        (driver, host, user, password, database) = self.config.database
+        Registry.DBPOOL = adbapi.ConnectionPool(driver, host=host,
+                  user=user, password=password, database=database)
         
+
     def start(self):
         """Start the netserver.
         
@@ -68,6 +63,9 @@ class NetServer(protocol.DatagramProtocol):
             self._cleanMessageCache)
         self.task['cleanMessageCache'].start(
             max(10, self.config.duplicateperiod*2))
+        
+        # TODO: Test database connection
+        
         # Start network interfaces:
         # LoRa gateway interface
         try:
@@ -117,20 +115,42 @@ class NetServer(protocol.DatagramProtocol):
             return None
         return interface
     
+    @inlineCallbacks
+    def _getOTAADevAddrs(self):
+        """Get all devaddrs for currently assigned Over the Air Activation (OTAA) devices.
+        
+        Returns:
+            A list of devaddrs.
+        """
+        devices = yield Device.find(where=['devaddr >= ? AND devaddr <= ?',
+                                           self.config.otaastart, self.config.otaaend],
+                                    orderby='devaddr')
+        if devices is None:
+            returnValue([])
+        devaddrs = [d.devaddr for d in devices]
+        returnValue(devaddrs)
+    
+    @inlineCallbacks
     def _getFreeOTAAddress(self):
         """Get the next free Over the Air Activation (OTAA) address.
         
         Returns:
             A 32 bit end device network address (DevAddr) on success, None otherwise.
         """
-        devaddr = self.config.otaastart + len(self.ota_devices)
-        if (devaddr > self.config.otaaend):
-            return None
-        return devaddr
+        # Get all active OTAA device addresses
+        devaddrs = yield self._getOTAADevAddrs()
+        
+        # Return None if no addresses available
+        if len(devaddrs) == len(self.otarange):
+            returnValue(None)
+        
+        # Find the set difference between the two lists, return lowest free address
+        diff = self.otarange.difference(devaddrs)
+        returnValue(diff.pop())
 
+    @inlineCallbacks
     def _getActiveDevice(self, devaddr):
-        """Searches active Over the Air activated devices for the given
-        address.
+        """Searches active devices for the given devaddr.
         
         Args:
             devaddr (int): A 32 bit end device network address (DevAddr).
@@ -138,41 +158,36 @@ class NetServer(protocol.DatagramProtocol):
         Returns:
             A device object if successful, None otherwise.
         """
-        # Search active OTAA devices
-        device = next((d for d in self.ota_devices
-                       if d.devaddr == devaddr), None)
-        if device is None:
-            # Search ABP devices
-            device = next((d for d in self.abp_devices
-                                if d.devaddr == devaddr), None)
-        return device
-
+        # Search active device for devaddr
+        device = yield Device.find(where=['devaddr = ?', devaddr], limit=1)
+        returnValue(device)
+    
+    @inlineCallbacks
     def _addActiveDevice(self, device):
-        """Adds the given Device object to the current OTAA active device
-        list.
+        """Adds the given Device object to the active device list.
         
         Args:
             device (Device): A device object to add.
         
         Returns:
-            True if successful, False otherwise.
+            Active device object if successful, None otherwise.
         """
         # Check if the device is currently active: search by deveui
-        active = next((i for i,d in enumerate(self.ota_devices)
-                       if d.deveui == device.deveui), None)
-        # Apply this device to the address if active
-        if active != None:
-            device.devaddr = self.ota_devices[active].devaddr
-            self.ota_devices[active] = copy.deepcopy(device)
-            return True
+        active = yield Device.find(where=['deveui = ?', device.deveui], limit=1)
+        # Copy appeui and keys, save and return
+        if active is not None:
+            for attr in ('appeui', 'nwkskey', 'appskey'):
+                setattr(active, attr, getattr(device, attr)) 
+            yield active.save()
+            returnValue(active)
         # Allocate the next OTA devaddr
-        device.devaddr = self._getFreeOTAAddress()
+        device.devaddr = yield self._getFreeOTAAddress()
         if device.devaddr is None:
             log.info("Could not allocate an OTA address for join request "
                     "from {deveui}.", deveui=euiString(device.deveui))
-            return False
-        self.ota_devices.append(copy.deepcopy(device))
-        return True
+            returnValue(None)
+        yield device.save()
+        returnValue(device)
     
     def _checkDuplicateMessage(self, message):
         """Checks for duplicate gateway messages.
@@ -254,7 +269,7 @@ class NetServer(protocol.DatagramProtocol):
             sts -= 4294967295
         return sts
 
-    def _txpkResponse(self, device, data, itmst=0, immediate=False):
+    def _txpkResponse(self, device, data, gateway, itmst=0, immediate=False):
         """Create Txpk object
         
         Args:
@@ -271,13 +286,13 @@ class NetServer(protocol.DatagramProtocol):
         for i in range(1,3):
             if immediate:
                 txpk[i] = Txpk(imme=True, freq=device.rx[i]['freq'],
-                               rfch=0, powe=device.gateway.power,
+                               rfch=0, powe=gateway.power,
                                modu="LORA", datr=device.rx[i]['datr'],
                                codr="4/5", ipol=True, ncrc=False, data=data)
             else:
                 tmst = self._scheduleDownlinkTime(itmst, device.rx[i]['delay'])
                 txpk[i] = Txpk(tmst=tmst, freq=device.rx[i]['freq'],
-                               rfch=0, powe=device.gateway.power,
+                               rfch=0, powe=gateway.power,
                                modu="LORA", datr=device.rx[i]['datr'],
                                codr="4/5", ipol=True, ncrc=False, data=data)
         return txpk
@@ -311,25 +326,24 @@ class NetServer(protocol.DatagramProtocol):
                         deveui=euiString(message.deveui),
                                          appeui=message.appeui)
                     returnValue(False)
-                # Create a new Device, set remote and rx window parameters
-                rx = self.band.rxparams(rxpk, join=True)
-                device = Device(deveui=message.deveui, remote=request.remote,
-                                rx=rx, gateway=gateway)
+                # Create a new Device, tx parameters and gateway address
+                device = Device(deveui=message.deveui, tx_chan=rxpk.chan,
+                                tx_datr=rxpk.datr, gw_addr=request.remote[0])
                 # If join request is successful, send a join response
-                joined = yield self._processJoinRequest(message, app, device)
-                if joined:
+                device = yield self._processJoinRequest(message, app, device)
+                if device:
                     log.info("Successful Join request from DevEUI {deveui} "
                             "for AppEUI {appeui} | Assigned address {devaddr}",
                             deveui=euiString(device.deveui),
                             appeui=euiString(app.appeui),
                             devaddr=devaddrString(device.devaddr))
-                    self._sendJoinResponse(request, rxpk, app, device)
+                    self._sendJoinResponse(request, rxpk, gateway, app, device)
                     returnValue(True)
                 else:
                     returnValue(False)
             
             # Check this is an active device                  
-            device = self._getActiveDevice(message.payload.fhdr.devaddr)
+            device = yield self._getActiveDevice(message.payload.fhdr.devaddr)
             
             if device is None:
                 log.info("Message from unregistered address {devaddr}",
@@ -344,15 +358,18 @@ class NetServer(protocol.DatagramProtocol):
                 returnValue(False)
             
             # Check frame counter
-            if not device.checkFrameCount(message.payload.fhdr.fcnt, self.band.max_fcnt_gap):
+            if not device.checkFrameCount(message.payload.fhdr.fcnt, self.band.max_fcnt_gap,
+                                         self.config.fcrelaxed):
                 log.info("Message from {devaddr} failed frame count check.",
                         devaddr=devaddrString(message.payload.fhdr.devaddr))
                 returnValue(False)
-                
-            # Set the device rx window parameters, remote, gateway EUI
-            device.rx = self.band.rxparams(rxpk, join=False)
+
+            # Set the device rx window parameters, remote, gateway
+            device.tx_datr = rxpk.datr
+            device.rx = self.band.rxparams((device.tx_chan, device.tx_datr), join=False)
             device.remote = request.remote
-            device.gateway = gateway
+            device.gw_addr = gateway.host
+            yield device.save()
             
             # MAC Command
             if message.isMACCommand():                
@@ -375,11 +392,11 @@ class NetServer(protocol.DatagramProtocol):
                     returnValue(False)
                 # Decrypt frmpayload
                 message.decrypt(device.appskey)
-                # Route the data to an application server via the configured
-                # interface
+                # Save the device state and route the data to an application
+                # server via the configured interface
                 log.info("Outbound message from devaddr {devaddr}",
                          devaddr=devaddrString(device.devaddr))
-                yield self._outboundAppMessage(app, device,
+                self._outboundAppMessage(app, device,
                                                message.payload.frmpayload,
                                                confirmed)
     
@@ -388,6 +405,7 @@ class NetServer(protocol.DatagramProtocol):
         self.protocol[app.name].netServerReceived(device.devaddr, appdata,
                                                   confirmed)
     
+    @inlineCallbacks
     def inboundAppMessage(self, devaddr, appdata, confirmed):
         """Sends inbound data from the application interface to the device
         
@@ -397,24 +415,32 @@ class NetServer(protocol.DatagramProtocol):
             confirmed (bool): Confirmed or unconfirmed message
         """
         
-        # Check devaddr is an active device
         log.info("Inbound message to devaddr {devaddr}",
                  devaddr=devaddrString(devaddr))
-        device = self._getActiveDevice(devaddr)
+
+        # Retrieve the active device
+        device = yield self._getActiveDevice(devaddr)
         if device is None:
             log.info("Cannot send to unregistered device address {devaddr}",
                      devaddr=devaddrString(devaddr))
-            return
+            returnValue(None)
 
-        # Find the associated app
+        # Find the associated application
         app = next((a for a in self.config.apps
                     if a.appeui == device.appeui), None)
         if app is None:
-            log.info("Inbount application message for {devaddr} - "
+            log.info("Inbound application message for {devaddr} - "
                 "AppEUI {appeui} does not match any configured applications.",
                 devaddr=euiString(device.devaddr), appeui=device.appeui)
-            return
+            returnValue(None)
         
+        # Find the gateway
+        gateway = self.protocol['lora'].configuredGateway(device.gw_addr)
+        if gateway is None:
+            log.info("Could not find gateway for inbound message to "
+                     "{devaddr}.", devaddr=euiString(device.devaddr))
+            returnValue(None)
+
         # Increment device fcntdown
         device.incFrameCountDown()
         # Create the downlink message, encrypt with AppSKey and encode
@@ -423,12 +449,15 @@ class NetServer(protocol.DatagramProtocol):
                                           appdata, confirmed=confirmed)
         response.encrypt(device.appskey)
         data = response.encode()
-
+        
         # Create Txpk objects
-        txpk = self._txpkResponse(device, data, immediate=True)
-        request = GatewayMessage(gatewayEUI=device.gateway.eui,
-                                 remote=(device.gateway.host,
-                                         device.gateway.port))
+        device.rx = self.band.rxparams((device.tx_chan, device.tx_datr), join=False)
+        txpk = self._txpkResponse(device, data, gateway, immediate=True)
+        request = GatewayMessage(gatewayEUI=gateway.eui, remote=(gateway.host,
+                                         gateway.port))
+        
+        # Save the device
+        yield device.save()
         
         # Send the RX1 window message
         self.protocol['lora'].sendPullResponse(request, txpk[1])
@@ -448,13 +477,13 @@ class NetServer(protocol.DatagramProtocol):
             device (Device): The requesting device object
             
         Returns:
-            True on success, False otherwise.
+            Device object on success, None otherwise.
         """
         # Perform message integrity check.
         if not message.checkMIC(app.appkey):
             log.info("Message from {deveui} failed message "
                     "integrity check.", deveui=euiString(message.deveui))
-            return False
+            return None
         
         # Assign DevEUI, NwkSkey and AppSKey.
         device.appeui = app.appeui
@@ -462,14 +491,14 @@ class NetServer(protocol.DatagramProtocol):
         device.appskey = self._createSessionKey(2, app, message)
         
         # Add the device to the active list
-        if not self._addActiveDevice(device):
+        device = self._addActiveDevice(device)
+        if device is None:
             self.log.info("Could not activate device {deveui}.",
                           deveui=euiString(device.deveui))
-            return False
-        
-        return True
+            return None
+        return device
     
-    def _sendJoinResponse(self, request, rxpk, app, device):
+    def _sendJoinResponse(self, request, rxpk, gateway, app, device):
         """Send a join response message
         
         Called if a join response message is to be sent.
@@ -481,7 +510,7 @@ class NetServer(protocol.DatagramProtocol):
         """ 
         # Get receive window parameters and
         # set dlsettings field
-        
+        device.rx = self.band.rxparams((device.tx_chan, device.tx_datr))
         dlsettings = 0 | self.band.rx1droffset << 4 | device.rx[2]['index']
         
         # Create the Join Response message
@@ -492,10 +521,10 @@ class NetServer(protocol.DatagramProtocol):
                                      dlsettings, device.rx[1]['delay'])
         data = response.encode()
         
-        txpk = self._txpkResponse(device, data, itmst=rxpk.tmst)
+        txpk = self._txpkResponse(device, data, gateway, rxpk.tmst)
         # Reset device fcntdown to zero on join response
         device.fcntdown = 0
-        # Send the RX1 window message
+        # Send the RX1 window messages
         self.protocol['lora'].sendPullResponse(request, txpk[1])
         # Send the RX2 window message
         self.protocol['lora'].sendPullResponse(request, txpk[2])
@@ -510,14 +539,14 @@ class NetServer(protocol.DatagramProtocol):
             
         """
         # We assume 'margin' corresponds to the
-        # abssolute value of LNSR, as an integer.
+        # absolute value of LNSR, as an integer.
         margin = abs(int(round(rxpk.lsnr)))
         # If we are processing the first request,
         # gateway count must be one, we guess.
         gwcnt = 1
 
         # Increment device fcntdown
-        device.incFrameCountDown()
+        device.fcntdown += 1
         # Create the LinkCheckAns response and encode
         command = LinkCheckAns(margin=margin, gwcnt=gwcnt)
         frmpayload = command.encode()
@@ -529,8 +558,15 @@ class NetServer(protocol.DatagramProtocol):
         response.encrypt(device.nwkskey)
         data = response.encode()
         
+        gateway = self.protocol['lora'].configuredGateway(device.gw_addr)
+        if gateway is None:
+            log.info("Could not find gateway for gateway {gw_addr} for device "
+                     "{devaddr}", gw_addr=device.gw_addr,
+                     devaddr=devaddrString(device.devaddr))
+            return
+        
         # Create Txpk objects
-        txpk = self._txpkResponse(device, data, rxpk.tmst)
+        txpk = self._txpkResponse(device, data, gateway, itmst=rxpk.tmst)
         
         # Send the RX1 window message
         self.protocol['lora'].sendPullResponse(request, txpk[1])

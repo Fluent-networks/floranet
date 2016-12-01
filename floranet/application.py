@@ -10,6 +10,10 @@ class Application(object):
         appeui (int): global application ID (IEEE EUI64)
         appnonce (int): A unique ID provided by the network server
         appkey (int): AES-128 application secret key
+        modname (str): applicaiton interface module name
+        proto (str): protocol type - udp or tcp
+        listen (str): interface to listen on
+        port (int): port to be used for applicaiton interface
     """
     
     def __init__(self, name=None, domain=None, appeui=None,

@@ -17,15 +17,15 @@ FloraNet was built using Python 2.7 and has been tested on Mac OS X and Ubuntu L
 ### Limitations
 * No support for EU863-870, CN779-787 or EU433 frequency bands. 
 * No support for Class B end-devices.
-* No persistent storage of OTA activations - OTA devices must re-join the network if the server is restarted.
 * No support for adaptive data rate (ADR) control.
 * No support for MAC commands other than the link check command.
 
 ### Prerequisites
 * Python 2.7
+* Postgres 9.3+
 * CryptoPlus 1.0
 
-Install CryptoPlus:
+Installing CryptoPlus:
 
 ```
 $ git clone https://github.com/doegox/python-cryptoplus.git
@@ -47,15 +47,55 @@ Run setup.py:
 $ sudo python setup.py install
 ```
 
-### Configuration
-FloraNet is configured using a single text-based file compatible with Python's configuration file parser.
+### Database Configuration
+FloraNet uses a Postgres database to initialise and maintain device information and device state. The database connection assumes that the access username/password is **postgres**/**postgres** and the database name is **floranet**. If you wish to alter these credentials, edit the following line in the file `data/alembic.ini`:
 
-The default configuration file `default.cfg` is located in the `floranet` directory. It contains the following sections:
+```
+sqlalchemy.url = postgresql://postgres:postgres@127.0.0.1:5432/floranet
+```
 
-* `[server]`: defines network parameters, frequency band, OTA and ABP join parameters, and gateways.
+#### Migration
+Run alembic to perform the inital database migration to create the device table.
+
+```
+$ cd data
+$ alembic upgrade head
+```
+
+#### Seeding
+
+You may optionally wish to populate the device table with ABP devices. This is accomplished using the `devices.csv` file in the `seed` directory. This file can be used to populate ABP devices with the  following fields (one line per device):
+
+| Field    | Description| Data Type |
+|----------|------------|-----------|
+| deveui  | Device EUI | Numeric |
+| devaddr | Device address | Integer |
+| appeui  | Application EUI | Numeric |
+| nwkskey | Network Secret Key | Numeric |
+| appskey | Application Secret Key | Numeric |
+
+Note that this file includes with three sample devices. To seed the database device table, run the `seeder` script in the `seed` directory.
+
+``` 
+$ cd data/seed
+$ ./seeder -s
+```
+
+To clear the device table, run:
+
+``` 
+$ ./seeder -c
+```
+
+
+### Server Configuration
+
+FloraNet uses a text-based file compatible with Python's configuration file parser. The default configuration file `default.cfg` is located in the `floranet` directory. It contains the following sections:
+
+* `[server]`: defines the server network configuration, database connection, frequency band, OTA addressing, gateways and other parameters.
 * `[application.test]`: defines an application identified by `test`, including the application identifier (AppEUI), secret key (AppKey), and upstream application interface configuration.
 
-Further information on configuration parameters is included in the project wiki.
+Detailed information on configuration parameters is included in the project wiki.
 
 ### Usage
 

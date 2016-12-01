@@ -1,0 +1,68 @@
+#!/usr/bin/env python
+
+import argparse
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from devices import Device
+
+# Create the enginer
+engine = create_engine('postgresql://postgres:postgres@localhost/floranet')
+
+# Create the session
+Session = sessionmaker(bind=engine)
+session = Session()
+
+classes = (Device,)
+
+def seed():
+    print "Seeding the database..."
+    try:
+        for c in classes:
+            c.seed(session)
+        session.commit()
+    except:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+def clear():
+    print "Clearing the database..."
+    try:
+        for c in classes:
+            c.clear(session)
+        session.commit()
+    except:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+        
+def parseCommandLine():
+    """Parse command line arguments"""
+    
+    parser = argparse.ArgumentParser(description='Seed data with SQLAlchemy.')
+    parser.add_argument('-s', dest='seed', action='store_true',
+                        help='seed the database')
+    parser.add_argument('-c', dest='clear', action='store_true',
+                        help='clear seed data')
+    parser.add_argument('-r', dest='reseed', action='store_true',
+                        help='clear and seed the database')
+    return parser.parse_args()
+
+def main():
+    # Parse command line arguments
+    args = parseCommandLine()
+    
+    if args.seed:
+        seed()
+    elif args.clear:
+        clear()
+    elif args.reseed:
+        clear()
+        seed()
+
+if __name__ == '__main__':
+    raise SystemExit(main())

@@ -1,5 +1,6 @@
+from twistar.dbobject import DBObject
 
-class Device(object):
+class Device(DBObject):
     """LoRa device class
     
     Model representing a LoRa device.
@@ -9,29 +10,16 @@ class Device(object):
         deveui (int): Global end-device ID (IEEE EUI64)
         nwkskey (int): 128 bit network session key (NwkSKey)
         appskey (int): 128 bit application session key (AppSKey)
-        rx (dict): RX1 and RX2 window parameters
-        remote (tuple): Remote gateway (host, port) tuple
-        gateway (Gateway): The gateway to this device
+        tx_chan (int): Transmit channel number
+        tx_datr (str): Transmit data rate
+        gw_addr (str): The gateway IP address
         fcntup (int): Uplink frame  counter received from the device
         fctndown (int): Downlink frame counter sent to to the device
     """
     
-    def __init__(self, devaddr=None, deveui=None, appeui=None, nwkskey=None,
-                 appskey=None, rx=None, remote=None, gateway=None, fcntup=0,
-                 fcntdown=0):
-        """Initialize a Device object."""
-        self.devaddr = devaddr
-        self.deveui = deveui
-        self.appeui = appeui
-        self.nwkskey = nwkskey
-        self.appskey = appskey
-        self.rx = rx
-        self.remote = remote
-        self.gateway = gateway
-        self.fcntup = fcntup
-        self.fcntdown = fcntdown
-    
-    def checkFrameCount(self, fcntup, maxfcntgap):
+    TABLENAME = 'devices'
+        
+    def checkFrameCount(self, fcntup, maxfcntgap, relaxed):
         """Sync fcntup counter with received value
         
         The value received must have incremented compared to current
@@ -42,11 +30,18 @@ class Device(object):
         Args:
             fcntup (int): Received fcntup value
             maxfcntgap (int): MAX_FCNT_GAP, band specific
+            relaxed (bool): frame count relaxed flag
             
         Returns:
             True if fcntup is within the limit, otherwise False.
         
         """
+        # Relxed mode. If fcntup = 1 then set fcntdown to zero
+        # and the device fntup to 1.
+        if relaxed and fcntup == 1:
+            self.fcntdown = 0
+            self.fcntup = 1
+            return True
         if fcntup > (self.fcntup + maxfcntgap):
             return False
         elif fcntup < self.fcntup and (65535 - self.fcntup + fcntup) > maxfcntgap:
@@ -55,6 +50,4 @@ class Device(object):
             self.fcntup = fcntup
             return True
 
-    def incFrameCountDown(self):
-        self.fcntdown += 1
     

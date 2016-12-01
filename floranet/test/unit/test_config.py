@@ -12,6 +12,7 @@ class configTest(unittest.TestCase):
 [server]
 listen = 127.0.0.1
 port = 1700
+database = ['psycopg2', '127.0.0.1', 'postgres', 'postgres', 'floranet']
 freqband = AU915
 netid = 0x010203
 abpdevices = [
@@ -41,6 +42,7 @@ abpdevices = [
         expected = [('freqband', 'AU915'),
                     ('port', 1700),
                     ('listen', '127.0.0.1'),
+                    ('database', ['psycopg2', '127.0.0.1', 'postgres', 'postgres', 'floranet']),
                     ('netid', int('0x010203', 16)),
                     ('abpdevices', abpdevices)
                    ]
@@ -49,6 +51,7 @@ abpdevices = [
             config.Option('freqband', 'str', default=False),
             config.Option('port', 'int', default=False),
             config.Option('listen', 'address', default=True, val=''),
+            config.Option('database', 'array', default=False),
             config.Option('netid', 'hex', default=False, length=3),
             config.Option('abpdevices', 'array', default=True, val=[])
         ]

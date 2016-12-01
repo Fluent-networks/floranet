@@ -13,7 +13,7 @@ def intHexString(n, length):
     """
     hstr = ''
     hlen = length * 2
-    hexs = format(n, '0' + str(hlen) + 'x')
+    hexs = format(int(n), '0' + str(hlen) + 'x')
     for i in range(0, hlen, 2):
         hstr += hexs[i:i+2] + ':' if i < (hlen-2) else hexs[i:i+2]        
     return hstr

@@ -431,7 +431,7 @@ class LoraInterface(protocol.DatagramProtocol):
             self.gateways.append(Gateway(host=g[0], eui=None,
                                          power=g[1], port=None))
             
-    def _configuredGateway(self, host):
+    def configuredGateway(self, host):
         """Get the configured gateway for host address
         
         Args:
@@ -456,7 +456,7 @@ class LoraInterface(protocol.DatagramProtocol):
         """
         log.info("Received {data} from {host}:{port}", data=repr(data),
                  host=host, port=port)
-        gateway = self._configuredGateway(host)
+        gateway = self.configuredGateway(host)
         if gateway is None:
             log.error("Gateway message from unknown gateway {host}", host=host)
             return
@@ -496,15 +496,15 @@ class LoraInterface(protocol.DatagramProtocol):
         """
         # Create a new PULL_RESP message. We must send to the
         # gateway's PULL_DATA port.
-        (host, port) = request.remote
-        gateway = self._configuredGateway(host)
+        host = request.remote[0]
+        gateway = self.configuredGateway(host)
         if gateway == None:
             log.error("Pull Reponse - no known gateway for {host}",
-                      host=request.remote[0])
+                      host=host)
             return
         if gateway.port == None:
             log.error("Pull Reponse - no known port for gateway {host}",
-                      host=request.remote[0])
+                      host=host)
             return
         remote = (host, gateway.port)
         m = GatewayMessage(version=request.version, token=request.token,

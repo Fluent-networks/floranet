@@ -103,7 +103,7 @@ class US915(object):
         return {'freq': 923.3, 'datr': self.datarate[rxindex],
                 'index': rxindex}
 
-    def rxparams(self, rxpk, join=False):
+    def rxparams(self, (tx_chan, tx_datr), join=False):
         """Get RX1 and RX2 receive window parameters
         
         Args:
@@ -113,7 +113,7 @@ class US915(object):
         Retrurns:
             Dict of RX1 and RX2 parameter dicts {freq, datarate, drindex, delay}
         """
-        rx1 = self._rx1receive(rxpk.chan, rxpk.datr, self.rx1droffset)
+        rx1 = self._rx1receive(tx_chan, tx_datr, self.rx1droffset)
         rx2 = self._rx2receive()
         if join:
             rx1['delay'] = self.join_accept_delay[1]

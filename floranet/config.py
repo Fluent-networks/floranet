@@ -77,6 +77,15 @@ class Configuration(object):
         if option.type == 'str':
             pass
 
+        # Check boolean type
+        elif option.type == 'boolean':
+            try:
+                v = self.parser.getboolean(section, option.name)
+            except (ConfigParser.Error, ValueError):
+                log.error("Could not parse option {opt} in {section}",
+                           opt=option.name, section=section)
+                return False
+            
         # Check integer type
         elif option.type == 'int':
             try:
@@ -183,12 +192,13 @@ class Configuration(object):
         options = [
             Option('listen', 'address', default=True, val=''),
             Option('port', 'int', default=False),
+            Option('database', 'array', default=False),
             Option('freqband', 'str', default=False),
             Option('netid', 'hex', default=False, length=3),
             Option('otaastart', 'hex', default=False, length=4),
             Option('otaaend', 'hex', default=False, length=4),
-            Option('abpdevices', 'array', default=True, val=[]),
             Option('duplicateperiod', 'int', default=False),
+            Option('fcrelaxed', 'boolean', default=True, val=False),
             Option('gateways', 'array', default=True, val=[]),
             ]
         for option in options:

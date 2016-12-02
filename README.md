@@ -48,7 +48,7 @@ $ sudo python setup.py install
 ```
 
 ### Database Configuration
-FloraNet uses a Postgres database to initialise and maintain device information and device state. The database connection assumes that the access username/password is **postgres**/**postgres** and the database name is **floranet**. If you wish to alter these credentials, edit the following line in the file `data/alembic.ini`:
+FloraNet uses a Postgres database to create ABP and OTA device information and maintain device state. The database connection assumes that the username/password is **postgres**/**postgres** and the database name is **floranet**. If you wish to alter this setup, edit the following line in the file `data/alembic.ini`:
 
 ```
 sqlalchemy.url = postgresql://postgres:postgres@127.0.0.1:5432/floranet
@@ -64,7 +64,7 @@ $ alembic upgrade head
 
 #### Seeding
 
-You may optionally wish to populate the device table with ABP devices. This is accomplished using the `devices.csv` file in the `seed` directory. This file can be used to populate ABP devices with the  following fields (one line per device):
+You may want to populate the device table with ABP devices. This is accomplished using the `devices.csv` file in the `seed` directory. This file can be used to create ABP devices using by defining the following fields (one line per device):
 
 | Field    | Description| Data Type |
 |----------|------------|-----------|
@@ -74,7 +74,7 @@ You may optionally wish to populate the device table with ABP devices. This is a
 | nwkskey | Network Secret Key | Numeric |
 | appskey | Application Secret Key | Numeric |
 
-Note that this file includes with three sample devices. To seed the database device table, run the `seeder` script in the `seed` directory.
+Note that this file includes three sample devices. To seed the database device table, run the `seeder` script in the `seed` directory.
 
 ``` 
 $ cd data/seed

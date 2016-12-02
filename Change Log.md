@@ -1,5 +1,10 @@
 # Change Log
 
+## [0.2.1] - 2016-12-02
+### Changed
+- Tidy up test files.
+- Minor edits to Readme
+
 ## [0.2.0] - 2016-12-01
 ### Added
 - Support for persistent device state using Postgres database.

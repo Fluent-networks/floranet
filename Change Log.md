@@ -1,5 +1,9 @@
 # Change Log
 
+## [0.2.2] - 2016-12-05
+### Fixed
+- Bug fix for device frame count increment.
+
 ## [0.2.1] - 2016-12-02
 ### Changed
 - Tidy up test files.

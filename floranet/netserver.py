@@ -442,7 +442,7 @@ class NetServer(protocol.DatagramProtocol):
             returnValue(None)
 
         # Increment device fcntdown
-        device.incFrameCountDown()
+        device.fcntdown += 1
         # Create the downlink message, encrypt with AppSKey and encode
         response = MACDataDownlinkMessage(device.devaddr, device.nwkskey,
                                           device.fcntdown, [], app.fport,

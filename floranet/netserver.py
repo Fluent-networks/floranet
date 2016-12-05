@@ -174,10 +174,12 @@ class NetServer(protocol.DatagramProtocol):
         """
         # Check if the device is currently active: search by deveui
         active = yield Device.find(where=['deveui = ?', device.deveui], limit=1)
-        # Copy appeui and keys, save and return
+        # Copy appeui and keys, reset fcntup and fcntdown, save and return
         if active is not None:
             for attr in ('appeui', 'nwkskey', 'appskey'):
-                setattr(active, attr, getattr(device, attr)) 
+                setattr(active, attr, getattr(device, attr))
+            active.fcntup = 0
+            active.fcntdown = 0
             yield active.save()
             returnValue(active)
         # Allocate the next OTA devaddr
@@ -186,6 +188,8 @@ class NetServer(protocol.DatagramProtocol):
             log.info("Could not allocate an OTA address for join request "
                     "from {deveui}.", deveui=euiString(device.deveui))
             returnValue(None)
+        device.fcntup = 0
+        device.fcntdown = 0
         yield device.save()
         returnValue(device)
     
@@ -522,8 +526,6 @@ class NetServer(protocol.DatagramProtocol):
         data = response.encode()
         
         txpk = self._txpkResponse(device, data, gateway, rxpk.tmst)
-        # Reset device fcntdown to zero on join response
-        device.fcntdown = 0
         # Send the RX1 window messages
         self.protocol['lora'].sendPullResponse(request, txpk[1])
         # Send the RX2 window message

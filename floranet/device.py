@@ -14,7 +14,7 @@ class Device(DBObject):
         tx_datr (str): Transmit data rate
         gw_addr (str): The gateway IP address
         fcntup (int): Uplink frame  counter received from the device
-        fctndown (int): Downlink frame counter sent to to the device
+        fcntdown (int): Downlink frame counter sent to to the device
     """
     
     TABLENAME = 'devices'

@@ -1,5 +1,9 @@
 # Change Log
 
+## [0.2.3] - 2016-12-05
+### Fixed
+- Bug fix: we were not resetting device fcntup and fcntdown to zero on a OTA re-join. This caused OTA devices to fail the device frame count check.
+
 ## [0.2.2] - 2016-12-05
 ### Fixed
 - Bug fix for device frame count increment.

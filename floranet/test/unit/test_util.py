@@ -1,10 +1,21 @@
+import time
 
 from twisted.trial import unittest
+from twisted.internet.defer import inlineCallbacks
 
 import floranet.util as util
 
 class utilTest(unittest.TestCase):
     
+    @inlineCallbacks
+    def test_txsleep(self):
+        t1 = time.time()
+        yield util.txsleep(1.2)
+        t2 = time.time()
+        
+        tdiff = t2 - t1
+        self.assertTrue(tdiff >= 1.2)
+        
     def test_euiString(self):
         eui = int('0x0f0e0e0d00010203', 16)
         

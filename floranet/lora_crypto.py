@@ -2,7 +2,7 @@
 from CryptoPlus.Cipher import python_AES
 
 def aesEncrypt(key, data, mode=None):
-    """AES encryption fucnction
+    """AES encryption function
     
     Args:
         key (str): packed 128 bit key

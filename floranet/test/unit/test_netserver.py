@@ -6,64 +6,26 @@ from random import randrange
 from mock import patch, MagicMock
 
 from twisted.trial import unittest
-from twisted.internet.defer import inlineCallbacks, Deferred, returnValue
-from twisted.internet import protocol, reactor
+from twisted.internet.defer import inlineCallbacks
+from twisted.internet import protocol
 
 import floranet.lora_gateway as loragw
 from floranet.netserver import NetServer
 from floranet.config import Configuration
 import floranet.lora_mac as lora_mac
 from floranet.device import Device
+import mock_dbobject as mockDBObject
 
-config = Configuration()
-cfile = os.path.join('floranet', 'test', 'unit', 'default.cfg')
-if not config.parseConfig(cfile):
-    exit(1)
-
-test_device = None
-
-@inlineCallbacks
-def mockDeviceFindSuccess(*args, **kwargs):
-    """ Device.find(limit=1) mock. Mocks successful find.
-    
-    Returns:
-        A Device test_device.
-    """
-    d = Deferred()
-    reactor.callLater(0, d.callback, args)
-    yield d
-    returnValue(test_device)
-
-@inlineCallbacks
-def mockDeviceFindFail(*args, **kwargs):
-    """ Device.find(limit=1) mock. Mocks unsuccessful find.
-    
-    Returns:
-        None.
-    """
-    d = Deferred()
-    reactor.callLater(0, d.callback, args)
-    yield d
-    returnValue(None)
-
-@inlineCallbacks
-def mockDeviceFindOne(*args, **kwargs):
-    """Device.find(limit=1) mock. Mocks multiple device query
-    where one device is found.
-    
-    Returns:
-        List containing one device.
-    """
-    d = Deferred()
-    reactor.callLater(0, d.callback, args)
-    yield d
-    returnValue([test_device])
-    
 class NetServerTest(unittest.TestCase):
     
     def setUp(self):
         """Test setup. Creates a new NetServer
         """
+        # Get configuration
+        config = Configuration()
+        cfile = os.path.join(config.path, 'test', 'unit', 'default.cfg')
+        if not config.parseConfig(cfile):
+            exit(1)
         self.server = NetServer(config)
 
     def _test_device(self):
@@ -86,18 +48,18 @@ class NetServerTest(unittest.TestCase):
     
     @inlineCallbacks
     def test_getOTAADevAddrs(self):
-        global test_device
-        test_device = self._test_device()
-        expected = [[], [test_device.devaddr]]
+        device = self._test_device()
+        mockDBObject.return_value = device
+        expected = [[], [device.devaddr]]
         
         results = []
         # Test when no devices are found
-        with patch.object(Device, 'find', classmethod(mockDeviceFindFail)):
+        with patch.object(Device, 'find', classmethod(mockDBObject.findFail)):
             result = yield self.server._getOTAADevAddrs()
             results.append(result)
             
         # Test when one device is found
-        with patch.object(Device, 'find', classmethod(mockDeviceFindOne)):
+        with patch.object(Device, 'find', classmethod(mockDBObject.findOne)):
             result = yield self.server._getOTAADevAddrs()
             results.append(result)
         
@@ -111,65 +73,70 @@ class NetServerTest(unittest.TestCase):
         
         # Test with empty OTA device list
         # Mock the server method to return the devaddr list
-        self.server._getOTAADevAddrs = MagicMock(return_value=[])
-        result = yield self.server._getFreeOTAAddress()
-        results.append(result)
+        with patch.object(self.server, '_getOTAADevAddrs',
+                          MagicMock(return_value=[])):
+            result = yield self.server._getFreeOTAAddress()
+            results.append(result)
 
         # Test with one OTA device
-        self.server._getOTAADevAddrs = \
-            MagicMock(return_value=[self.server.config.otaastart])
-        result = yield self.server._getFreeOTAAddress()
-        results.append(result)
+        with patch.object(self.server, '_getOTAADevAddrs', MagicMock(
+                return_value=[self.server.config.otaastart])):
+            result = yield self.server._getFreeOTAAddress()
+            results.append(result)
         
         # Test with last address only available
-        self.server._getOTAADevAddrs = MagicMock(return_value=
-            xrange(self.server.config.otaastart, self.server.config.otaaend))
-        result = yield self.server._getFreeOTAAddress()
-        results.append(result)
+        with patch.object(self.server, '_getOTAADevAddrs',MagicMock(
+            return_value=xrange(self.server.config.otaastart,
+                                self.server.config.otaaend))):
+            result = yield self.server._getFreeOTAAddress()
+            results.append(result)
 
         # Test with no address available
-        self.server._getOTAADevAddrs = MagicMock(return_value=
-            xrange(self.server.config.otaastart, self.server.config.otaaend + 1))
-        result = yield self.server._getFreeOTAAddress()
-        results.append(result)
+        with patch.object(self.server, '_getOTAADevAddrs',MagicMock(
+            return_value=xrange(self.server.config.otaastart,
+                                self.server.config.otaaend + 1))):
+            result = yield self.server._getFreeOTAAddress()
+            results.append(result)
         
         self.assertEqual(expected, results)
         
     @inlineCallbacks
     def test_getActiveDevice(self):
         # Include for coverage. We are essentially testing a returnValue() call.
-        global test_device
-        test_device = self._test_device()
-        with patch.object(Device, 'find', classmethod(mockDeviceFindSuccess)):
-            expected = test_device.deveui
-            device = yield self.server._getActiveDevice(test_device.devaddr)
-            self.assertEqual(expected, device.deveui)
+        device = self._test_device()
+        mockDBObject.return_value = device
+        
+        expected = device.deveui
+        
+        with patch.object(Device, 'find', classmethod(mockDBObject.findSuccess)):
+            result = yield self.server._getActiveDevice(device.devaddr)
+        
+        self.assertEqual(expected, result.deveui)
 
     @inlineCallbacks
     def test_addActiveDevice(self):
-        global test_device
-        test_device = self._test_device()
-        # test for device deveui, and allocated devaddr
-        expected = [config.otaastart + 1, test_device.deveui]
+        device = self._test_device()
+        mockDBObject.return_value = device
+        
+        # Test for device deveui, and allocated devaddr
+        expected = [self.server.config.otaastart + 1, device.deveui]
         results = []
         
         # Test adding a new device. i.e. Device.find() fails.
         # _addActiveDevice returns the saved device
-        with patch.object(Device, 'find', classmethod(mockDeviceFindFail)):
-            test_device.devaddr = 0
-            # Mock the device save() method
-            test_device.save = MagicMock(return_value=test_device)
-            # Mock the server _getFreeOTAAddress
-            self.server._getFreeOTAAddress = MagicMock(return_value=config.otaastart + 1)
-            device = yield self.server._addActiveDevice(test_device)
-            results.append(device.devaddr)
+        with patch.object(Device, 'find', classmethod(mockDBObject.findFail)), \
+                patch.object(device, 'save', MagicMock(return_value=device)), \
+                patch.object(self.server, '_getFreeOTAAddress',
+                             MagicMock(return_value=self.server.config.otaastart + 1)):
+            device.devaddr = 0
+            result = yield self.server._addActiveDevice(device)
+            results.append(result.devaddr)
         
         # Test when the device is found in the active list.
-        with patch.object(Device, 'find', classmethod(mockDeviceFindSuccess)):
-            # Mock the device save() method
-            test_device.save = MagicMock(return_value=test_device)
-            device = yield self.server._addActiveDevice(test_device)
-            results.append(device.deveui)
+        with patch.object(Device, 'find', classmethod(mockDBObject.findSuccess)), \
+                patch.object(device, 'save', MagicMock(return_value=device)):
+            result = yield self.server._addActiveDevice(device)
+            results.append(result.deveui)
         
         self.assertEqual(expected, results)
     
@@ -201,7 +168,6 @@ class NetServerTest(unittest.TestCase):
         self.assertEqual(expected, result)
 
     def test_cleanMessageCache(self):
-        dp = self.server.config.duplicateperiod
         self.server.config.duplicateperiod = 10
         
         # Create 10 cache entries, remove 5
@@ -214,8 +180,76 @@ class NetServerTest(unittest.TestCase):
         result = len(self.server.message_cache)
         
         self.assertEqual(expected, result)
-        self.server.config.duplicateperiod = dp
 
+    def test_manageMACCommandQueue(self):
+        self.server.config.macqueuelimit = 10
+        
+        # Create 10 cache entries, remove 5
+        now = time.time()
+        for i in range(1,21,2):
+            self.server.commands.append((int(now - i), i, lora_mac.LinkCheckAns()))
+        
+        expected = 5
+        self.server._manageMACCommandQueue()
+        result = len(self.server.commands)
+        
+        self.assertEqual(expected, result)
+        
+    @inlineCallbacks
+    def test_processADRRequests(self):
+        device = self._test_device()
+        mockDBObject.return_value = [device]        
+        # Remove any delays
+        self.server.config.adrmessagetime = 0
+        
+        device.snr_average = 3.5
+        device.adr_datr = None
+
+        # Test we set adr_datr device attribute properly
+        expected = ['SF9BW125', False]
+        results = []
+        
+        with patch.object(Device, 'all', classmethod(mockDBObject.all)), \
+                patch.multiple(device, refresh=MagicMock(), save=MagicMock()), \
+                patch.object(self.server, '_sendLinkADRRequest'):
+            yield self.server._processADRRequests()
+            results.append(device.adr_datr)
+        
+        results.append(self.server.adrprocessing)
+        self.assertEqual(expected, results)
+    
+    def _createCommands(self):
+        datarate = 'SF7BW125'
+        chmask = int('FF', 16)
+        return [lora_mac.LinkCheckAns(), lora_mac.LinkADRReq(datarate, 0, chmask, 6, 0)]
+
+    def test_queueMACCommand(self):
+        device = self._test_device()
+        commands = self._createCommands()
+
+        expected = [2, lora_mac.LINKCHECKANS, lora_mac.LINKADRREQ]
+        
+        for c in commands:
+            self.server._queueMACCommand(device.deveui, c)
+        result = [len(self.server.commands), self.server.commands[0][2].cid,
+                      self.server.commands[1][2].cid]
+        
+        self.assertEqual(expected, result)
+    
+    def test_dequeueMACCommand(self):
+        device = self._test_device()
+        commands = self._createCommands()
+        for c in commands:
+            self.server._queueMACCommand(device.deveui, c)
+            
+        self.server._dequeueMACCommand(device.deveui, commands[1])
+
+        expected = [1, lora_mac.LINKCHECKANS]
+        
+        result = [len(self.server.commands), self.server.commands[0][2].cid]
+        
+        self.assertEqual(expected, result)
+        
     def test_scheduleDownlinkTime(self):
         offset = 10
         tmst = randrange(0, 4294967295 - 10000000)
@@ -230,13 +264,8 @@ class NetServerTest(unittest.TestCase):
     
     def test_txpkResponse(self):
         tmst = randrange(0, 4294967295)
-        rxpk = loragw.Rxpk()
-        rxpk.tmst=tmst
-        rxpk.chan=3
-        rxpk.freq=915.8
-        rxpk.datr='SF7BW125'
-        rxpk.size=54
-        rxpk.data="n/uSwM0LIED8X6QV0mJMjC6oc2HOWFpCfmTry"
+        rxpk = loragw.Rxpk(tmst=tmst, chan=3, freq=915.8, datr='SF7BW125',
+                           data="n/uSwM0LIED8X6QV0mJMjC6oc2HOWFpCfmTry", size=54)
         device = self._test_device()
         device.rx = self.server.band.rxparams((rxpk.chan, rxpk.datr), join=False)
         gateway = self.server.protocol['lora'].configuredGateway(device.gw_addr)
@@ -277,23 +306,7 @@ class NetServerTest(unittest.TestCase):
         result = self._processJoinRequest(joinreq)
         
         self.assertFalse(result)
-        
-    def test_processLinkCheckReq(self):
-        req = loragw.GatewayMessage()
-        req.remote = ('192.168.1.125', 44773)
-        req.rxpk = []
-        req.rxpk.append(loragw.Rxpk())
-        req.rxpk[0].tmst = 4220249403
-        req.rxpk[0].chan = 3
-        req.rxpk[0].lsnr = -11.0
-        req.rxpk[0].datr = "SF7BW125"
-        device = self._test_device()
-        device.nwkskey=int('0x276A3405ED5BFB31', 16)
-        device.fcntdown=22
-        device.rx = self.server.band.rxparams((req.rxpk[0].chan, req.rxpk[0].datr))
-
-        self.server._processLinkCheckReq(req, req.rxpk[0], device)
-        
+    
         
         
         

@@ -3,6 +3,7 @@ import imp
 import os
 import time
 
+
 from twisted.internet import reactor, task, protocol
 from twisted.internet.error import CannotListenError
 from twisted.internet.defer import inlineCallbacks, returnValue
@@ -11,11 +12,11 @@ from twistar.registry import Registry
 
 from lora_gateway import LoraInterface, GatewayMessage, Txpk
 from lora_mac import MACMessage, MACDataDownlinkMessage, JoinAcceptMessage
-from lora_mac import MACCommand, LinkCheckAns
+from lora_mac import MACCommand, LinkCheckAns, LinkADRReq
 from lora_bands import AU915, US915
 from lora_crypto import aesEncrypt
 from device import Device
-from util import euiString, devaddrString, intPackBytes, intUnpackBytes
+from util import txsleep, euiString, devaddrString, intPackBytes, intUnpackBytes
 from log import log
 
 class NetServer(protocol.DatagramProtocol):
@@ -24,12 +25,12 @@ class NetServer(protocol.DatagramProtocol):
     Attributes:
         config (Configuration): the server configuration object
         protocol (dict): dictionary of protocol interfaces
-        ota_devices (list): Active over the air activation devices
-        abp_device (list): Activation by personalisation devices
-        message_cache (list): A list of timestamped message MICs used
-                              for de-duplicaiton
-        task (dict): dictionary of scheduled tasks
-        band: (US915 or AU915): A frequency band object
+        message_cache (list): Timestamped message MICs used for de-duplication
+        otagrange (set): Collection set of OTA addresses
+        task (dict): Dictionary of scheduled tasks
+        commands (dict): Dictionary of queued downlink MAC Commands
+        adrprocessing (bool): ADR processing flag
+        band: (US915 or AU915): Frequency band object
 
     """
     def __init__(self, config):
@@ -45,12 +46,14 @@ class NetServer(protocol.DatagramProtocol):
         self.message_cache = []
         self.otarange = set(xrange(self.config.otaastart, self.config.otaaend + 1))
         self.task = {}
+        self.commands = []
+        self.adrprocessing = False
         self.band = eval(self.config.freqband)()
+        # Establish database connection
         (driver, host, user, password, database) = self.config.database
         Registry.DBPOOL = adbapi.ConnectionPool(driver, host=host,
                   user=user, password=password, database=database)
         
-
     def start(self):
         """Start the netserver.
         
@@ -58,13 +61,41 @@ class NetServer(protocol.DatagramProtocol):
         interfaces.
         """
         log.info("Starting the server")
+        
+        # Test the database connection. Currently we only support postgres.
+        (driver, host, user, password, database) = self.config.database
+        if driver == 'psycopg2':
+            import psycopg2
+            try:
+                connection = psycopg2.connect(host=host,
+                      user=user, password=password, database=database)
+                connection.close()
+            except psycopg2.OperationalError:
+                log.error("Error connecting to database {database} on "
+                          "host '{host}', user '{user}'. Check the database "
+                          "and user credentials.",
+                          database=database, host=host, user=user)
+                exit(1)
+        
         # Setup scheduled tasks
+        # 1. ADR Requests
+        self.task['processADRRequests'] = task.LoopingCall(
+            self._processADRRequests)
+        self.task['processADRRequests'].start(
+            self.config.adrcycletime)
+        
+        # 2. Message cache
         self.task['cleanMessageCache'] = task.LoopingCall(
             self._cleanMessageCache)
         self.task['cleanMessageCache'].start(
             max(10, self.config.duplicateperiod*2))
-        
-        # TODO: Test database connection
+
+        # 3. MAC Command queue
+        if self.config.macqueuing:
+            self.task['manageMACCommandQueue'] = task.LoopingCall(
+                self._manageMACCommandQueue)
+            self.task['manageMACCommandQueue'].start(
+                self.config.macqueuelimit/2)
         
         # Start network interfaces:
         # LoRa gateway interface
@@ -174,22 +205,22 @@ class NetServer(protocol.DatagramProtocol):
         """
         # Check if the device is currently active: search by deveui
         active = yield Device.find(where=['deveui = ?', device.deveui], limit=1)
-        # Copy appeui and keys, reset fcntup and fcntdown, save and return
+        
+        # Existing device: copy appeui and keys, reset frame count parameters, save and return
         if active is not None:
             for attr in ('appeui', 'nwkskey', 'appskey'):
                 setattr(active, attr, getattr(device, attr))
-            active.fcntup = 0
-            active.fcntdown = 0
+            active.resetFrameCount()
             yield active.save()
             returnValue(active)
-        # Allocate the next OTA devaddr
+            
+        # New device: allocate the next OTA devaddr
         device.devaddr = yield self._getFreeOTAAddress()
         if device.devaddr is None:
             log.info("Could not allocate an OTA address for join request "
                     "from {deveui}.", deveui=euiString(device.deveui))
             returnValue(None)
-        device.fcntup = 0
-        device.fcntdown = 0
+        device.resetFrameCount()
         yield device.save()
         returnValue(device)
     
@@ -221,7 +252,7 @@ class NetServer(protocol.DatagramProtocol):
         if not duplicate:
             self.message_cache.append((message.mic, mark))
         return duplicate
-
+    
     def _cleanMessageCache(self):
         """Removes stale entries from the message cache.
         
@@ -231,7 +262,71 @@ class NetServer(protocol.DatagramProtocol):
         mark = time.time()
         self.message_cache = [x for x in self.message_cache if not
                               (x[1] + self.config.duplicateperiod) < mark]
+
+    def _manageMACCommandQueue(self):
+        """Removes expired MAC Commands from the queue.
         
+        This method is periodically called to limit the queue size.
+        """
+        mark = time.time()
+        self.commands = [x for x in self.commands if not
+                              (x[0] + self.config.macqueuelimit) < mark]
+        
+    @inlineCallbacks
+    def _processADRRequests(self):
+        """Updates devices with target data rate, and sends ADR requests.
+        
+        This method is called every adrcycletime seconds as a looping task.
+        
+        """
+        # Check ADR is enabled
+        if not self.config.adrenable:
+            returnValue()
+            
+        # If we are running, return
+        if self.adrprocessing is True:
+            returnValue()
+        
+        self.adrprocessing = True
+        
+        devices = yield Device.all()
+        sendtime = time.time()
+        
+        for device in devices:            
+            # Set the target data rate 
+            target = device.getADRDatarate(self.band, self.config.adrmargin)
+            
+            # If no target, or the target data rate is being used, continue
+            if target is None:
+                continue
+            
+            # Set the device adr_datr
+            yield device.update(adr_datr=target)
+            
+            # Only send a request if we need to change
+            if device.adr_datr == target:
+                continue
+            
+            # If we are queueing commands, create the command and add to the queue.
+            # Replace any existing requests.
+            if self.config.macqueuing:
+                command = self._createLinkADRRequest(device)
+                self._dequeueMACCommand(device.deveui, command)
+                self._queueMACCommand(device.deveui, command)
+                continue
+
+            # Check we have reached the next scheduled ADR message time
+            scheduled = sendtime + self.config.adrmessagetime
+            current = time.time()
+            if current < scheduled:
+                yield txsleep(scheduled - current)            
+
+            # Refresh and send the LinkADRRequest
+            sendtime = time.time()         
+            yield self._sendLinkADRRequest(device)
+            
+        self.adrprocessing = False
+    
     def _createSessionKey(self, pre, app, msg):
         """Create a NwkSKey or AppSKey
         
@@ -256,6 +351,32 @@ class NetServer(protocol.DatagramProtocol):
         key = intUnpackBytes(aesdata)
         return key
     
+    def _queueMACCommand(self, deveui, command):
+        """Add a MAC command to the queue
+        
+        Args:
+            deveui: (int) Device deveui
+            command: (Device): Command to add
+        
+        """
+        item = (int(time.time()), int(deveui), command)
+        self.commands.append(item)
+
+    def _dequeueMACCommand(self, deveui, command):
+        """Remove MAC command(s) from the queue.
+        
+        Removes all commands for device with deveui and commands of the
+        type command.cid
+        
+        Args:
+            deveui: (int) Device deveui
+            command: (Device): Command to add
+        
+        """
+        ids = [i for i,c in enumerate(self.commands) if (deveui == c[1] and c[2].cid == command.cid)]
+        for i in ids:
+            del self.commands[i]
+        
     def _scheduleDownlinkTime(self, tmst, offset):
         """Calculate the timestamp for downlink transmission
         
@@ -336,6 +457,10 @@ class NetServer(protocol.DatagramProtocol):
                 # If join request is successful, send a join response
                 device = yield self._processJoinRequest(message, app, device)
                 if device:
+                    # Save and update the ADR measures
+                    yield device.save()
+                    if self.config.adrenable:
+                        device.updateSNR(rxpk.lsnr)
                     log.info("Successful Join request from DevEUI {deveui} "
                             "for AppEUI {appeui} | Assigned address {devaddr}",
                             deveui=euiString(device.deveui),
@@ -354,37 +479,46 @@ class NetServer(protocol.DatagramProtocol):
                          devaddr=devaddrString(message.payload.fhdr.devaddr))
                 returnValue(False)
 
+            # Check frame counter
+            if not device.checkFrameCount(message.payload.fhdr.fcnt, self.band.max_fcnt_gap,
+                                         self.config.fcrelaxed):
+                log.info("Message from {devaddr} failed frame count check.",
+                        devaddr=devaddrString(message.payload.fhdr.devaddr))
+                yield device.save()
+                returnValue(False)
+
             # Perform message integrity check.
             if not message.checkMIC(device.nwkskey):
                 log.info("Message from {devaddr} failed message "
                         "integrity check.",
                         devaddr=devaddrString(message.payload.fhdr.devaddr))
                 returnValue(False)
-            
-            # Check frame counter
-            if not device.checkFrameCount(message.payload.fhdr.fcnt, self.band.max_fcnt_gap,
-                                         self.config.fcrelaxed):
-                log.info("Message from {devaddr} failed frame count check.",
-                        devaddr=devaddrString(message.payload.fhdr.devaddr))
-                returnValue(False)
 
-            # Set the device rx window parameters, remote, gateway
+            # Set the device rx window parameters, remote, gateway and update SNR reading
             device.tx_datr = rxpk.datr
             device.rx = self.band.rxparams((device.tx_chan, device.tx_datr), join=False)
             device.remote = request.remote
             device.gw_addr = gateway.host
+            device.updateSNR(rxpk.lsnr)
             yield device.save()
             
-            # MAC Command
-            if message.isMACCommand():                
+            # Process MAC Commands
+            commands = []
+            if message.isMACCommand():
                 message.decrypt(device.nwkskey)
-                command = MACCommand.decode(message.payload.frmpayload)
+                commands = [MACCommand.decode(message.payload.frmpayload)]
+            elif message.hasMACCommands():
+                commands = message.commands
+                
+            for command in commands:
                 if command.isLinkCheckReq():
-                    self._processLinkCheckReq(request, rxpk, device)
+                    self._processLinkCheckReq(device, command, request, rxpk.lsnr)
+                elif command.isLinkADRAns():
+                    self._processLinkADRAns(device, command)
                 # TODO: add other MAC commands
                 
-            # Data message
-            elif message.isUnconfirmedDataUp() or message.isConfirmedDataUp():
+            # Process application data message
+            if message.isUnconfirmedDataUp() or message.isConfirmedDataUp():
                 confirmed = message.isConfirmedDataUp()
                 # Find the app
                 app = next((a for a in self.config.apps if a.appeui ==
@@ -396,17 +530,19 @@ class NetServer(protocol.DatagramProtocol):
                     returnValue(False)
                 # Decrypt frmpayload
                 message.decrypt(device.appskey)
+                appdata = str(message.payload.frmpayload)
+                
                 # Save the device state and route the data to an application
                 # server via the configured interface
                 log.info("Outbound message from devaddr {devaddr}",
                          devaddr=devaddrString(device.devaddr))
-                self._outboundAppMessage(app, device,
-                                               message.payload.frmpayload,
+                self._outboundAppMessage(app, int(device.devaddr),
+                                               appdata,
                                                confirmed)
     
-    def _outboundAppMessage(self, app, device, appdata, confirmed):
+    def _outboundAppMessage(self, app, devaddr, appdata, confirmed):
         """Sends application data to the application interface"""
-        self.protocol[app.name].netServerReceived(device.devaddr, appdata,
+        self.protocol[app.name].netServerReceived(devaddr, appdata,
                                                   confirmed)
     
     @inlineCallbacks
@@ -445,27 +581,44 @@ class NetServer(protocol.DatagramProtocol):
                      "{devaddr}.", devaddr=euiString(device.devaddr))
             returnValue(None)
 
-        # Increment device fcntdown
-        device.fcntdown += 1
+        # Increment fcntdown
+        fcntdown = device.fcntdown + 1
         # Create the downlink message, encrypt with AppSKey and encode
-        response = MACDataDownlinkMessage(device.devaddr, device.nwkskey,
-                                          device.fcntdown, [], app.fport,
-                                          appdata, confirmed=confirmed)
+        
+        # Piggyback queued MAC messages in fopts 
+        fopts = ''
+        device.rx = self.band.rxparams((device.tx_chan, device.tx_datr), join=False)
+        if self.config.macqueuing:
+            # Get all of this device's queued commands: this returns a list of tuples (index, command)
+            commands = [(i,c[2]) for i,c in enumerate(self.commands) if device.deveui == c[1]]
+            for (index, command) in commands:
+                # Check if we can accommodate the command. If so, encode and remove form the queue
+                if self.band.checkAppPayloadLen(device.rx[1]['datr'], len(fopts) + len(appdata)):
+                    fopts += command.encode()
+                    del self.commands[index]
+                else:
+                    break
+        
+        response = MACDataDownlinkMessage(device.devaddr,
+                                          device.nwkskey,
+                                          device.fcntdown,
+                                          self.config.adrenable,
+                                          fopts, int(app.fport), appdata,
+                                          confirmed=confirmed)
         response.encrypt(device.appskey)
         data = response.encode()
         
         # Create Txpk objects
-        device.rx = self.band.rxparams((device.tx_chan, device.tx_datr), join=False)
         txpk = self._txpkResponse(device, data, gateway, immediate=True)
         request = GatewayMessage(gatewayEUI=gateway.eui, remote=(gateway.host,
                                          gateway.port))
         
         # Save the device
-        yield device.save()
-        
-        # Send the RX1 window message
+        device.update(fcntdown=fcntdown)
+
+        # Send RX1 window message
         self.protocol['lora'].sendPullResponse(request, txpk[1])
-        # Send the RX2 window message
+        # Send RX2 window message
         self.protocol['lora'].sendPullResponse(request, txpk[2])
         
     def _processJoinRequest(self, message, app, device):
@@ -531,56 +684,130 @@ class NetServer(protocol.DatagramProtocol):
         # Send the RX2 window message
         self.protocol['lora'].sendPullResponse(request, txpk[2])
         
-    def _processLinkCheckReq(self, request, rxpk, device):
+    def _processLinkCheckReq(self, device, command, request, lsnr):
         """Process a link check request
         
         Args:
-            request (MACCommand): received MAC command message
-            rxpk (Rxpk): Received Rxpk
             device (Device): Sending device
-            
+            command (LinkCheckReq): LinkCheckReq object
         """
         # We assume 'margin' corresponds to the
         # absolute value of LNSR, as an integer.
-        margin = abs(int(round(rxpk.lsnr)))
+        # Set to zero if negative.
+        margin = max (0, round(lsnr))
         # If we are processing the first request,
         # gateway count must be one, we guess.
         gwcnt = 1
 
-        # Increment device fcntdown
-        device.fcntdown += 1
-        # Create the LinkCheckAns response and encode
+        # Create the LinkCheckAns response and encode. Set fcntdown
         command = LinkCheckAns(margin=margin, gwcnt=gwcnt)
+        
+        # Queue the command if required 
+        if self.config.macqueuing:
+            self._queueMACCommand(device.deveui, command)
+            return
+            
         frmpayload = command.encode()
+        fcntdown = device.fcntdown + 1
+        
         # Create the downlink message. Set fport=0,
         # encrypt with NwkSKey and encode
-        response = MACDataDownlinkMessage(device.devaddr, device.nwkskey,
-                                          device.fcntdown, [], 0, frmpayload,
+        message = MACDataDownlinkMessage(device.devaddr,
+                                          device.nwkskey,
+                                          fcntdown,
+                                          self.config.adrenable,
+                                          '', 0, frmpayload,
                                           confirmed=True)
-        response.encrypt(device.nwkskey)
-        data = response.encode()
+        message.encrypt(device.nwkskey)
+        data = message.encode()
         
         gateway = self.protocol['lora'].configuredGateway(device.gw_addr)
         if gateway is None:
             log.info("Could not find gateway for gateway {gw_addr} for device "
                      "{devaddr}", gw_addr=device.gw_addr,
                      devaddr=devaddrString(device.devaddr))
-            return
+            returnValue(None)
         
-        # Create Txpk objects
-        txpk = self._txpkResponse(device, data, gateway, itmst=rxpk.tmst)
+        # Create GatewayMessage and Txpk objects, send immediately
+        request = GatewayMessage(version=1, token=0, remote=(gateway.host, gateway.port))
+        device.rx = self.band.rxparams((device.tx_chan, device.tx_datr))
+        txpk = self._txpkResponse(device, data, gateway, immediate=True)
         
-        # Send the RX1 window message
-        self.protocol['lora'].sendPullResponse(request, txpk[1])
+        # Update the device fcntdown
+        device.update(fcntdown=fcntdown)
+        
+        # Send the RX2 window message
+        self.protocol['lora'].sendPullResponse(request, txpk[2])
+    
+    def _createLinkADRRequest(self, device):
+        """Create a Link ADR Request message
+        
+        Args:
+            device: (Device): Target device
+        
+        Returns:
+            Link ADR Request object
+        """ 
+        # Create the LinkADRRequest and encode
+        datarate = self.band.datarate_rev[device.adr_datr]
+        chmask = int('FF', 16)
+        command = LinkADRReq(datarate, 0, chmask, 6, 0)
+        return command
+    
+    @inlineCallbacks
+    def _sendLinkADRRequest(self, device, command):
+        """Send a Link ADR Request message
+        
+        Called if an ADR change is required for this device.
+        
+        Args:
+            device: (Device): Target device
+            command (LinkADRReq): Link ADR Request object
+        """ 
+        frmpayload = command.encode()
+        
+        # Create the downlink message. Increment fcntdown, set fport=0,
+        # encrypt with NwkSKey and encode
+        fcntdown = device.fcntdown + 1
+        log.info("Sending ADR Request to devaddr {devaddr}",
+                 devaddr=devaddrString(device.devaddr))
+        message = MACDataDownlinkMessage(device.devaddr,
+                                         device.nwkskey,
+                                         fcntdown,
+                                         self.config.adrenable,
+                                         '', 0, frmpayload)
+        message.encrypt(device.nwkskey)
+        data = message.encode()
+        
+        gateway = self.protocol['lora'].configuredGateway(device.gw_addr)
+        if gateway is None:
+            log.info("Could not find gateway for gateway {gw_addr} for device "
+                     "{devaddr}", gw_addr=device.gw_addr,
+                     devaddr=devaddrString(device.devaddr))
+            returnValue(None)
+        
+        # Create GatewayMessage and Txpk objects, send immediately
+        request = GatewayMessage(version=1, token=0, remote=(gateway.host, gateway.port))
+        device.rx = self.band.rxparams((device.tx_chan, device.tx_datr))
+        txpk = self._txpkResponse(device, data, gateway, immediate=True)
+        
+        # Update the device fcntdown
+        device.update(fcntdown=fcntdown)
+        
         # Send the RX2 window message
         self.protocol['lora'].sendPullResponse(request, txpk[2])
         
+    def _processLinkADRAns(self, device, command):
+        """Process a link ADR answer
         
-
+        Returns three ACKS: power_ack, datarate_ack, channelmask_ack
         
-        
-    
-        
-    
-
+        Args:
+            device (Device): Sending device
+            command (LinkADRAns): LinkADRAns object
+        """
+        # Not much to do here - we will know if the device had changed datarate via
+        # the rxpk field. 
+        log.info("Received LinkADRAns from device {devaddr}",
+                 devaddr=devaddrString(device.devaddr))
 

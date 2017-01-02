@@ -113,7 +113,6 @@ class Rxpk(object):
     Section 6.2.2.
     
     Attributes:
-        time (str): UTC time of the LoRa frame (us precision).
         tmst (int): value of the gateway time counter when the
                     frame was received (us precision).
         freq (float): Centre frequency of recieved signal (MHz).
@@ -131,28 +130,31 @@ class Rxpk(object):
                     bits and n is total bits received.
         rssi (int): The measured received signal strength (dBm).
         lsnr (float): Measured signal to noise ratio (dB).
-        size (int): Number of octects in the received frame.
         data (str): Frame payload encoded in Base64.
+        time (str): UTC time of the LoRa frame (us precision).
+        size (int): Number of octects in the received frame.
     
     """
     
-    def __init__(self):
+    def __init__(self, tmst=None, freq=None, chan=None, rfch=None,
+                 stat=None, modu=None, datr=None, codr=None, rssi=None,
+                 lsnr=None, data=None, time=None, size=None):
         """Rxpk initialisation method.
         
         """
-        self.time = None        
-        self.tmst = None
-        self.freq = None
-        self.chan = None
-        self.rfch = None
-        self.stat = None
-        self.modu = None
-        self.datr = None
-        self.codr = None
-        self.rssi = None
-        self.lsnr = None
-        self.size = None
-        self.data = None
+        self.tmst = tmst
+        self.freq = freq
+        self.chan = chan
+        self.rfch = rfch
+        self.stat = stat
+        self.modu = modu
+        self.datr = datr
+        self.codr = codr
+        self.rssi = rssi
+        self.lsnr = lsnr
+        self.data = data
+        self.time = time        
+        self.size = size
                 
     @classmethod
     def decode(cls, rxp):
@@ -173,23 +175,24 @@ class Rxpk(object):
                      'rssi', 'lsnr', 'data')
         if not all (rkeys for k in mandatory):
             return None
-        r = Rxpk()
         # Mandatory attributes
-        r.tmst = int(rxp['tmst'])
-        r.freq = float(rxp['freq'])        
-        r.chan = int(rxp['chan'])
-        r.rfch = int(rxp['rfch'])
-        r.stat = int(rxp['stat'])
-        r.modu = rxp['modu']
-        r.datr = rxp['datr']
-        r.codr = rxp['codr']
-        r.rssi = int(rxp['rssi'])
-        r.lsnr = float(rxp['lsnr'])
-        r.data = base64.b64decode(rxp['data'])
+        tmst = int(rxp['tmst'])
+        freq = float(rxp['freq'])        
+        chan = int(rxp['chan'])
+        rfch = int(rxp['rfch'])
+        stat = int(rxp['stat'])
+        modu = rxp['modu']
+        datr = rxp['datr']
+        codr = rxp['codr']
+        rssi = int(rxp['rssi'])
+        lsnr = float(rxp['lsnr'])
+        data = base64.b64decode(rxp['data'])
         # Optional attributes
-        r.time = rxp['time'] if 'time' in rkeys else None
-        r.size = int(rxp['size']) if 'size' in rkeys else None        
-        return r
+        time = rxp['time'] if 'time' in rkeys else None
+        size = int(rxp['size']) if 'size' in rkeys else None        
+        return Rxpk(tmst=tmst, freq=freq, chan=chan, rfch=rfch, stat=stat,
+                    modu=modu, datr=datr, codr=codr, rssi=rssi, lsnr=lsnr,
+                    data=data, time=time, size=size)
 
 class Txpk(object):
     """A Gateway Txpk (downstream) JSON object.
@@ -289,7 +292,7 @@ class GatewayMessage(object):
     
     Attributes:
         version (int): Protocol version - 0x01 or 0x02
-        token (str): Arbitratry tracking value set by the gateway.
+        token (str): Arbitrary tracking value set by the gateway.
         id (int): Identifier - see GWMP Identifiers above.
         gatewayEUI (str): Gateway device identifier.
         payload (str): GWMP payload.

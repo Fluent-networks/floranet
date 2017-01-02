@@ -13,7 +13,6 @@ UN_DATA_UP = 2
 UN_DATA_DOWN = 3
 CO_DATA_UP = 4
 CO_DATA_DOWN = 5
-RFU = 6
 PROPRIETARY = 7
 
 """MAC Commands"""
@@ -99,39 +98,33 @@ class FrameHeader(object):
     octets used to transport MAC commands (fopts).
     
     Attributes:
-        devaddress: Short device address.
-        fctrl (int): Frame control octet.
+        devaddr (str): Device address.
+        adr (int): ADR bit
+        adrackreq (int): ADR acknowledgment request bit
+        ack (int): Acknowledgment bit.
+        foptslen (int): Frame options length field: Length of the 
+                        fopts field included in the frame.
         fcnt (int): Frame counter.
         fopts (list): Frame options.
-        adr (int):
-        adrackreq (int):
-        ack (int):
-        foptslen (int):
+        fdir (str): Frame direction (uplink or downlink).
+        length (int): Length of the frameheader
         
     """
     
-    def __init__(self, devaddr, fctrl, fcnt, fopts='', fdir='up'):
+    def __init__(self, devaddr, adr, adrackreq, ack,
+                 foptslen, fcnt, fopts, fpending=0, fdir='up'):
         """FrameHeader initialisation method.
-        
-        Args:
-            devaddr (str): Device address.
-            fctrl (int): Frame control octet.
-            fcnt (int): Frame counter.
-            fopts (list): Frame options.
-            fdir (str): Frame direction (uplink or downlink).
         
         """
         self.devaddr = devaddr
-        self.fctrl = fctrl
+        self.adr = adr
+        self.adrackreq = adrackreq
+        self.ack = ack
+        self.fpending = fpending
+        self.foptslen = foptslen
         self.fcnt = fcnt
-        self.adr = fctrl & 128      # Bit 7
-        self.adrackreq = fctrl & 64 # Bit 6
-        self.ack = fctrl & 32       # Bit 5
-        self.foptslen = fctrl & 15  # Bits 3..0
-        if fdir == 'down':
-            self.fpending = fctrl & 16
-        ## TODO: Handle fopts decoding
         self.fopts = fopts
+        self.fdir = fdir
         self.length = self.foptslen + 7
 
     @classmethod
@@ -149,8 +142,19 @@ class FrameHeader(object):
         if len(data) < 7:
             raise error.DecodeError()
         (devaddr, fctrl, fcnt) = struct.unpack('<LBH', data[:7])
-        fopts = data[7:]
-        fheader = FrameHeader(devaddr, fctrl, fcnt, fopts, fdir='up')
+        # Decode fctrl field
+        # ADR is bit 7
+        adr = (fctrl & 128) >> 7
+        # ADRackreq is bit 6
+        adrackreq = (fctrl & 64) >> 6
+        # ACK is bit 5
+        ack = (fctrl & 32) >> 5
+        # Foptslen = bits [3:0]
+        foptslen = fctrl & 15
+        fopts = data[7:7+foptslen]
+        
+        fheader = FrameHeader(devaddr, adr, adrackreq, ack,
+                 foptslen, fcnt, fopts)
         return fheader
     
     def encode(self):
@@ -160,8 +164,10 @@ class FrameHeader(object):
             String of packed data.
         
         """
-        # TODO: Handle fopts encoding
-        data = struct.pack('<LBH', self.devaddr, self.fctrl, self.fcnt)
+        fctrl = 0 | (self.adr << 7) | (self.adrackreq << 6) \
+                  | (self.ack << 5) | (self.fpending << 4) \
+                  | (self.foptslen & 15)
+        data = struct.pack('<LBH', self.devaddr, fctrl, self.fcnt) + self.fopts
         return data
     
 class MACPayload(object):
@@ -212,8 +218,8 @@ class MACPayload(object):
         # Decode frmpayload
         if dlen > fhdr.length + 1:
             frmpayload = data[fhdr.length+1:]
-        m = MACPayload(fhdr, fport, frmpayload)
-        return m
+        p = MACPayload(fhdr, fport, frmpayload)
+        return p
 
     def encode(self):
         """Create a binary representation of MACPayload object.
@@ -267,10 +273,15 @@ class MACMessage(object):
             True on match, otherwise False.
         
         """
-        if not self.isConfirmedDataUp():
-            return False
         return self.payload.fport == 0
-    
+
+    def hasMACCommands(self):
+        """Check if the message has piggybacked MAC commands.
+        
+        Returns:
+            True on match, otherwise False.
+        """
+        return hasattr(self, 'commands') and len(self.commands) > 0
     
     def isUnconfirmedDataUp(self):
         """Check if message is Unconfirmed Data Up.
@@ -491,15 +502,18 @@ class MACDataUplinkMessage(MACDataMessage):
     Attributes:
         mhdr (MACHeader): MAC header
         payload (MACPayload): MAC payload object
+        commands (list): List of piggybacked MAC commands
         mic (int): Message integrity code
         confirmed (bool): True if Confirmed Data Up
     
     """
-    def __init__(self, mhdr, payload, mic):
+    def __init__(self, mhdr, payload, commands, mic):
         self.mhdr = mhdr
         self.payload = payload
+        self.commands = commands
         self.mic = mic
         self.confirmed = self.mhdr.mtype == CO_DATA_UP
+        self.maccommands = [] 
     
     @classmethod
     def decode(cls, mhdr, data):
@@ -510,16 +524,30 @@ class MACDataUplinkMessage(MACDataMessage):
             data (str): UDP packet data.
         
         Returns:
-            MACMessage object on success, otherwise None.
+            A MACDataUplinkMessage object.
         """
         # Message (PHYPayload) must be at least 6 bytes
         if len(data) < 6:
-            raise error.DecodeError()            
-        # Decode MAC Payload
+            raise error.DecodeError()
+        # Decode message payload
         payload = MACPayload.decode(data[1:len(data)-4])
+        
+        # Decode fopts MAC Commands
+        commands = []
+        p = 0
+        while p < payload.fhdr.foptslen:
+            c = MACCommand.decode(payload.fhdr.fopts[p:])
+            # We have no option except to break here if we fail to decode 
+            # a MAC command, as we have no way of advancing the pointer
+            if c is None:
+                break
+            commands.append(c)
+            p += c.length
+            
         # Slice the MIC
         mic = struct.unpack('<L', data[len(data)-4:])[0]
-        m = MACDataUplinkMessage(mhdr, payload, mic)
+        
+        m = MACDataUplinkMessage(mhdr, payload, commands, mic)
         return m
     
     def decrypt(self, key):
@@ -560,8 +588,8 @@ class MACDataDownlinkMessage(MACDataMessage):
         key (int): Encryption key (NwkSkey or AppSKey)
         
     """
-    def __init__(self, devaddr, key, fcnt, fopts, fport, frmpayload,
-                 confirmed=False):
+    def __init__(self, devaddr, key, fcnt, adrenable, fopts,
+                 fport, frmpayload, confirmed=False):
         """MACDataDownlinkMessage initialisation method.
         
         """
@@ -569,11 +597,14 @@ class MACDataDownlinkMessage(MACDataMessage):
         self.key = key
         if confirmed:
             self.mhdr = MACHeader(CO_DATA_DOWN, LORAWAN_R1)
-            fctrl = 32
+            ack = 1
         else:
             self.mhdr = MACHeader(UN_DATA_DOWN, LORAWAN_R1)
-            fctrl = 0
-        fhdr = FrameHeader(devaddr, fctrl, fcnt, fopts=fopts, fdir='down')
+            ack = 0
+        adr = 1 if adrenable is True else 0
+        foptslen = len(fopts)
+        fhdr = FrameHeader(devaddr, adr, 0, ack, foptslen, fcnt,
+                           fopts, fpending=0, fdir='down')
         self.payload = MACPayload(fhdr, fport, frmpayload)
         self.mic = None
         
@@ -610,27 +641,29 @@ class MACCommand(object):
     """A MAC Command.
     
     LoRa MAC commands consist of a command identifier (CID) of
-    1 octect followed y a possibly empty command-specific sequence
+    1 octect followed by a possibly empty command-specific sequence
     of octets.
-
+    
     """
     @classmethod
     def decode(cls, data):
         """Create a MACCommand object from binary representation.
         
         Args:
-            data (str): FRMpayload.
+            data (str): FRMpayload, or fopts.
         
         Returns:
             MACCommand object on success, otherwise None.
             
         """
-        cid = struct.unpack('B', data)[0]
+        if len(data) == 0:
+            return None
+        cid = struct.unpack('B', data[0])[0]
         if cid == LINKCHECKREQ:
             return LinkCheckReq.decode(data)
+        elif cid == LINKADRANS:
+            return LinkADRAns.decode(data)
         # TODO
-        #elif cid == LINKADRANS:
-        #    return LinkADRReq.decode(data)
         #elif cid == DUTYCYCLEANS:
         #    return DutyCycleReq.decode(data)
         #elif cid == RXPARAMSETUPANS:
@@ -643,6 +676,7 @@ class MACCommand(object):
         #    return RxTimingSetupReq.decode(data)
         else:
             return None
+    
         
     def isLinkCheckReq(self):
         """Check if the message is a LinkCheckReq MAC Command.
@@ -652,14 +686,28 @@ class MACCommand(object):
         
         """
         return self.cid == LINKCHECKREQ
-
+    
+    def isLinkADRAns(self):
+        """Check if the message is a LinkADRAns MAC Command.
+        
+        Returns:
+            True on match, otherwise False.
+        
+        """
+        return self.cid == LINKADRANS
 
 class LinkCheckReq(MACCommand):
-    """Used by an end device to validate its connectivity to the network"""
+    """Used by an end device to validate its connectivity to the network
     
-    def __init__(self):
+    Attributes:
+        cid (int): Command identifier
+        length (int): Command length including CID
+    """
+    
+    def __init__(self, margin=0, gwcnt=1):
         self.cid = LINKCHECKREQ
-    
+        self.length = 1
+        
     @classmethod
     def decode(cls, data):
         return LinkCheckReq()
@@ -668,7 +716,8 @@ class LinkCheckAns(MACCommand):
     """Used by the network server to respond to a LinkCheckReq command
     
     Attributes:
-        cid (int): MAC command identifier
+        length (int): Frame length 
+        cid (int): Command identifier
         margin (int): an 8-bit unsigned integer in the range of 0..254
                       indicating the link margin in dB of the last
                       successfully received LinkCheckReq command.
@@ -676,14 +725,105 @@ class LinkCheckAns(MACCommand):
                      the last LinkCheckReq command
         
     """
+    length = 3
+    
     def __init__(self, margin=0, gwcnt=1):
         self.cid = LINKCHECKANS
         self.margin = margin
         self.gwcnt = gwcnt
     
     def encode(self):
+        """Create a binary representation of LinkCheckReq object.
+        
+        Returns:
+            String of packed data.
+        
+        """
         data = struct.pack('BBB', self.cid, self.margin, self.gwcnt)
         return data
+
+class LinkADRReq(MACCommand):
+    """With the LinkADRReq command, the network server requests an
+    end-device to perform a rate adaptation.
     
+    Attributes:
+        length (int): Frame length
+        cid (int): Command identifier
+        datarate (int): a 4-bit integer representing the device target data
+                      rate, region specific
+        txpower (int): a 4-bit integer that defines device transmit power,
+                      region specific
+        chmask (int): a 16-bit unsigned integer that encodes the channels
+                      usable for uplink access - bit 0 is the LSB.
+        chmaskcntl (int): a 3-bit integer that controls the interpretation
+                      of the ChMask bit mask.
+        nbrep (int): a 4-bit integer defining the number of repetitions
+                      for each uplink message.
+    """
+    length = 5
+    
+    def __init__(self, datarate, txpower, chmask, chmaskcntl, nbrep):
+        self.cid = LINKADRREQ
+        self.datarate = datarate
+        self.txpower = txpower
+        self.chmask = chmask
+        self.chmaskcntl = chmaskcntl
+        self.nbrep = nbrep
+    
+    def encode(self):
+        """Create a binary representation of LinkADRReq object.
+        
+        Returns:
+            String of packed data.
+        
+        """
+        datarate_txpower = 0 | (self.datarate << 4) | self.txpower
+        redundancy = 0 | (self.chmaskcntl << 4) | self.nbrep
+        data = struct.pack('<BBHB', self.cid, datarate_txpower, self.chmask, redundancy)
+        return data
 
-
+class LinkADRAns(MACCommand):
+    """Used by a device to respond to a LinkADRReq command
+    
+    Attributes:
+        cid (int): Command identifier
+        length (int): Command length including CID
+        power_ack (int): Power ACK bit
+        datarate_ack (int): Data Rate ACK bit
+        channelmask_ack (int): Channel mask ACK bit
+    
+    """
+    def __init__(self, power_ack=0, datarate_ack=0, channelmask_ack=0):
+        self.cid = LINKADRANS
+        self.length = 2
+        self.power_ack = power_ack
+        self.datarate_ack = datarate_ack
+        self.channelmask_ack = channelmask_ack
+    
+    @classmethod
+    def decode(cls, data):
+        """Create a LinkADRAns object from binary representation.
+        
+        Args:
+            data (str): MAC Command data
+        
+        Returns:
+            LinkADRAns object.
+        """
+        status = struct.unpack('B', data[1])[0]
+        # Power ACK is bit 2
+        power_ack = (status & 0x04) >> 2
+        # Datarate ACK is bit 1
+        datarate_ack = (status & 0x02) >> 1
+        # Channelmask ACK is bit 0
+        channelmask_ack = status & 0x01
+        return LinkADRAns(power_ack, datarate_ack, channelmask_ack)
+    
+    def successful(self):
+        """Test if the LinkADRAns message is successful.
+        
+        Returns:
+            True if all attributes are 1, otherwise False.
+        """
+        return (self.power_ack & self.datarate_ack & self.channelmask_ack) == 1
+    

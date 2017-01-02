@@ -34,13 +34,16 @@ class Configuration(object):
     Attributes:
         parser (SafeConfigParser): parser object
         cfile (str): configuration file name
+        path (str): Path to this module
         app (list): list of configured Application objects
         
     """    
     def __init__(self):
-        
+        """Initialise configuration.
+        """
         self.parser = ConfigParser.SafeConfigParser()
         self.cfile = None
+        self.path = os.path.dirname(os.path.abspath(__file__))
             
         # Applications
         self.apps = []
@@ -197,6 +200,12 @@ class Configuration(object):
             Option('netid', 'hex', default=False, length=3),
             Option('otaastart', 'hex', default=False, length=4),
             Option('otaaend', 'hex', default=False, length=4),
+            Option('macqueuing', 'boolean', default=False),
+            Option('macqueuelimit', 'int', default=True, val=300),
+            Option('adrenable', 'boolean', default=True, val=False),
+            Option('adrmargin', 'int', default=True, val=0),
+            Option('adrcycletime', 'int', default=True, val=90),
+            Option('adrmessagetime', 'int', default=True, val=30),
             Option('duplicateperiod', 'int', default=False),
             Option('fcrelaxed', 'boolean', default=True, val=False),
             Option('gateways', 'array', default=True, val=[]),

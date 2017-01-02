@@ -1,6 +1,13 @@
 
 import struct
+from twisted.internet import reactor
+from twisted.internet.defer import Deferred
 
+def txsleep(secs):
+        d = Deferred()
+        reactor.callLater(secs, d.callback, None)
+        return d
+    
 def intHexString(n, length):
     """Convert an integer to a dotted hex representation.
     

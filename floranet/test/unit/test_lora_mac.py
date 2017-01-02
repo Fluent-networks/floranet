@@ -2,6 +2,7 @@
 from twisted.trial import unittest
 
 import struct
+import base64
 
 import floranet.lora_mac as lora_mac
 
@@ -30,16 +31,16 @@ class FrameHeaderTest(unittest.TestCase):
     
     def test_decode(self):
         # devaddr (4), fctrl (1), fcnt (2)
-        data = struct.pack('<LBH', int('0x06100000', 16), 0, 1234)
+        data = struct.pack('<LBH', int('0x06100000', 16), (128+64+32), 1234)
         
-        expected = (int('0x06100000', 16), 0, 1234, 7)
+        expected = (int('0x06100000', 16), 1, 1, 1, 1234, 7)
         fhdr = lora_mac.FrameHeader.decode(data)
-        result = (fhdr.devaddr, fhdr.fctrl, fhdr.fcnt, fhdr.length)
+        result = (fhdr.devaddr, fhdr.adr, fhdr.adrackreq, fhdr.ack, fhdr.fcnt, fhdr.length)
         
         self.assertEqual(expected, result)
     
     def test_encode(self):
-        fhdr = lora_mac.FrameHeader(int('0x06100000', 16), 0, 1234)
+        fhdr = lora_mac.FrameHeader(int('0x06100000', 16), 0, 0, 0, 0, 1234, '')
         
         expected = '\x00\x00\x10\x06\x00\xd2\x04'
         result = fhdr.encode()
@@ -59,7 +60,7 @@ class MACPayloadTest(unittest.TestCase):
         self.assertEqual(expected, result)
         
     def test_encode(self):
-        fhdr = lora_mac.FrameHeader(int('0x06100000', 16), 0, 1234)
+        fhdr = lora_mac.FrameHeader(int('0x06100000', 16), 0, 0, 0, 0, 1234, '')
         
         expected = '\x00\x00\x10\x06\x00\xd2\x04\x0fhelloworld'
         payload = lora_mac.MACPayload(fhdr, 15, 'helloworld')
@@ -127,6 +128,17 @@ class MACDataUplinkMessageTest(unittest.TestCase):
         result = (self.m.mhdr.mtype, self.m.confirmed)
         
         self.assertEqual(expected, result)
+        
+    def test_decode_piggyback(self):
+        # Decode MacDataUplink message with piggybacked LinkADRAns, status = 0x07
+        data = base64.b64decode('QAAAEAaCAgADBw9dMFcf9Q==')
+        mhdr = lora_mac.MACHeader.decode(data[0])
+        
+        expected = [lora_mac.LINKADRANS, 1, 1, 1]
+        m = lora_mac.MACDataUplinkMessage.decode(mhdr, data)
+        result = [m.commands[0].cid, m.commands[0].power_ack,
+                  m.commands[0].datarate_ack, m.commands[0].channelmask_ack]
+        self.assertEqual(expected, result)    
     
     def test_checkMIC(self):
         result = self.m.checkMIC(self.nwkskey)
@@ -146,10 +158,58 @@ class MACDataDownlinkMessageTest(unittest.TestCase):
         expected = '`\x00\x00\x10\x06\x00t\x01\x0f@\x98\xc8\xfd['
         m = lora_mac.MACDataDownlinkMessage(int('0x06100000',16),
                                             int('0x7987A96F267F0A86B739EED480FC2B3C', 16),
-                                            372, '', 15, '@')
+                                            372, False, '', 15, '@')
+        result = m.encode()
+        
+        self.assertEqual(expected, result)
+
+class LinkCheckReqTest(unittest.TestCase):
+    
+    def test_decode(self):
+        data = '\x02'
+        m = lora_mac.MACCommand.decode(data)
+        
+        self.assertTrue(m.cid == lora_mac.LINKCHECKREQ)
+    
+class LinkCheckAnsTest(unittest.TestCase):
+    
+    def test_encode(self):
+        expected = '\x02\x07\x01'
+        m = lora_mac.LinkCheckAns(margin=7, gwcnt=1)
+        
         result = m.encode()
         
         self.assertEqual(expected, result)
         
+class LinkADRReqTest(unittest.TestCase):
+    
+    def test_encode(self):
+        expected = '\x03\x21\xff\x00\x00'
+        chmask = int('FF', 16)
+        m = lora_mac.LinkADRReq(datarate=2, txpower=1, chmask=chmask, chmaskcntl=0, nbrep=0)
+        
+        result = m.encode()
+        
+        self.assertEqual(expected, result)
+
+class LinkADRAnsTest(unittest.TestCase):
+    
+    def test_decode(self):
+        data = '\x03\x05'
+        expected = [1, 0, 1]
+        m = lora_mac.MACCommand.decode(data)
+        
+        result = [m.power_ack, m.datarate_ack, m.channelmask_ack]
+        self.assertEqual(expected, result)
+    
+    def test_successful(self):
+        expected = [False, True]
+        failm = lora_mac.LinkADRAns(1, 0, 1)
+        passm = lora_mac.LinkADRAns(1, 1, 1)
+        
+        result=[failm.successful(), passm.successful()]
+        self.assertEqual(expected, result)
+    
+    
 
     

@@ -20,8 +20,15 @@ class US915(object):
     rx1dr (dict): Dictonary of lists to lookup the RX1 window data rate by
                     transmit data rate and Rx1DROffset parameters. Lookup by
                     rx1dr[txdatarate][rx1droffset]
+    rx1droffset (int): RX1 default DR offset
     receive_delay (dict): First and second window window receive delays
     join_accept_delay (dict): First and second window join accept delay
+    max_fcnt_gap  (int): Maximum tolerable frame count gap.
+    maxmac (dict): List of maximum MACpayload sizes (in bytes) for each
+                    datarate.
+    maxapp (dict): List of maximum application sizes (in bytes) for each
+                    datarate.
+                    
                     
     """
 
@@ -43,7 +50,7 @@ class US915(object):
             1:  'SF9BW125',
             2:  'SF8BW125',
             3:  'SF7BW125',
-            4:  'SF8BW125',
+            4:  'SF8BW500',
             8:  'SF12BW500',
             9:  'SF11BW500',
             10: 'SF10BW500',
@@ -52,9 +59,8 @@ class US915(object):
             13: 'SF7BW500'
         }
         self.datarate_rev = {v:k for k, v in self.datarate.items()}
-        self.maxpayload = {0:  19,  1:  61,  2:  137,  3:  250,
-                           4:  250, 8:  41,  9:  117,  10: 230,
-                           11: 230, 12: 230, 13: 230}
+        self.txpower = {0: 30, 1: 28, 2: 26, 3: 24, 4: 22, 5: 20,
+                        6: 18, 7: 16, 8: 14, 9: 12, 10: 10 }
         self.rx1dr = {
                     0: [10,  9,   8,   8],
                     1: [11,  10,  9,   8],
@@ -71,6 +77,30 @@ class US915(object):
         self.receive_delay = {1: 1, 2: 2}
         self.join_accept_delay = {1: 1, 2: 2}
         self.max_fcnt_gap = 16384
+        self.maxpayloadlen = {
+            0: 19,
+            1: 61,
+            2: 137,
+            3: 250,
+            4: 250,
+            8: 61,
+            9: 137,
+            10: 250,
+            11: 250,
+            12: 250,
+            13: 250 }
+        self.maxappdatalen = {
+            0: 11,
+            1: 53,
+            2: 129,
+            3: 242,
+            4: 242,
+            8: 53,
+            9: 129,
+            10: 242,
+            11: 242,
+            12: 242,
+            13: 242 }
         
     def _rx1receive(self, txch, txdr, rx1droffset):
         """Get first receive window parameters
@@ -122,6 +152,16 @@ class US915(object):
             rx1['delay'] = self.receive_delay[1]
             rx2['delay'] = self.receive_delay[2]
         return {1: rx1, 2: rx2}
+
+    def checkAppPayloadLen(self, datarate, length):
+        """Check if the length is greater than the maximum allowed
+        application payload length
+        
+        Args:
+            datarate: (str) Datarate code
+            length (int): Length of payload
+        """
+        return self.maxappdatalen[self.datarate_rev[datarate]] >= length
     
 class AU915(US915):
     """Australian pseudostandard 915-928 ISM Band

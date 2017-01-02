@@ -1,5 +1,12 @@
 # Change Log
 
+## [0.3.0] - 2017-01-02
+### Added
+- Support for adaptive data rate (ADR) control and ADR MAC commands
+- Support for encoding & decoding MAC commands sent in the fopts field in LoRa MAC messages
+- Support for MAC command queuing, allows commands to be sent in the downlink message window
+- Added database connection test on server startup
+
 ## [0.2.3] - 2016-12-05
 ### Fixed
 - Bug fix: we were not resetting device fcntup and fcntdown to zero on a OTA re-join. This caused OTA devices to fail the device frame count check.

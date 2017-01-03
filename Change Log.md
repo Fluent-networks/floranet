@@ -1,5 +1,9 @@
 # Change Log
 
+## [0.3.1] - 2017-01-03
+### Changed
+- Update README
+
 ## [0.3.0] - 2017-01-02
 ### Added
 - Support for adaptive data rate (ADR) control and ADR MAC commands

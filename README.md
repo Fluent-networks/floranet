@@ -11,14 +11,13 @@ FloraNet was built using Python 2.7 and has been tested on Mac OS X and Ubuntu L
 * Supports Class A and Class C end-devices.
 * Supports US 902-928 MHz and AU 915-928 MHz ISM bands. 
 * Support for over the air (OTA) activation and activation by personalisation (ABP) join procedures.
+* Support for adaptive data rate (ADR) control.
 * De-duplication of messages delivered from multiple gateways.
 * Support for multiple applications and extensible application server interfaces using plugin modules.
 
 ### Limitations
 * No support for EU863-870, CN779-787 or EU433 frequency bands. 
 * No support for Class B end-devices.
-* No support for adaptive data rate (ADR) control.
-* No support for MAC commands other than the link check command.
 
 ### Prerequisites
 * Python 2.7

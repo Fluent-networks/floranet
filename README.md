@@ -16,8 +16,9 @@ FloraNet was built using Python 2.7 and has been tested on Mac OS X and Ubuntu L
 * Support for multiple applications and extensible application server interfaces using plugin modules.
 
 ### Limitations
-* No support for EU863-870, CN779-787 or EU433 frequency bands. 
+* No support for CN779-787 or EU433 frequency bands. 
 * No support for Class B end-devices.
+* support for EU863-870 at alpha stage
 
 ### Prerequisites
 * Python 2.7
@@ -94,11 +95,10 @@ FloraNet uses a text-based file compatible with Python's configuration file pars
 * `[server]`: defines the server network configuration, database connection, frequency band, OTA addressing, gateways and other parameters.
 * `[application.test]`: defines an application identified by `test`, including the application identifier (AppEUI), secret key (AppKey), and upstream application interface configuration.
 
-Detailed information on configuration parameters is included in the project wiki.
 
 ### Usage
 
-Start FloraNet using the following command-line paramters.
+Start FloraNet using the following command-line parameters.
 
 
 ```
@@ -110,3 +110,16 @@ Arguments:
   -c config   configuration file (default: default.cfg)
   -l logfile  log file (default: /tmp/floranet.log)
 ```
+
+### Troubleshooting
+
+If you encounter an error "FATAL: password authentication failed for user postgres" at setup, you can change
+the password by:
+```
+>sudo -u postgres psql
+postgres=# ALTER USER postgres PASSWORD 'postgres';
+postgres=# CREATE DATABASE floranet;
+``` 
+
+
+

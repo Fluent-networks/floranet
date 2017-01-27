@@ -17,7 +17,7 @@ class US915(object):
     datarate_rev (dict): Reverse lookup for datarate.
     maxpayload (dict): Maximim payload size, indexed by datarate as per
                     Table 20 of the LoRa specification
-    rx1dr (dict): Dictonary of lists to lookup the RX1 window data rate by
+    rx1dr (dict): Dictionary of lists to lookup the RX1 window data rate by
                     transmit data rate and Rx1DROffset parameters. Lookup by
                     rx1dr[txdatarate][rx1droffset]
     rx1droffset (int): RX1 default DR offset
@@ -179,4 +179,70 @@ class AU915(US915):
         for i in range(0, 8):
             self.upstream.append((9159 + 16.0 * i)/10)
 
-    
+   
+class EU868(US915):
+    """ EUROPEAN 863-870 ISM Band 
+        based on LoRoWAN_Regional_Parameters_v1_0
+    """
+    def __init__(self):
+        super(EU868, self).__init__()
+        self.upstream = [ 868.10 , 868.30 , 868.50 , 867.1 , 867.3 , 867.5 , 867.7 , 867.9 , 868.8 ]
+        self.downstream = self.upstream
+        self.datarate = {
+            0: 'SF12BW125',
+            1: 'SF11BW125',
+            2: 'SF10BW125',
+            3: 'SF9BW125',
+            4: 'SF8BW125',
+            5: 'SF7BW125',
+            6: 'SF7BW250'
+            #7: FSK ?
+        }
+        self.datarate_rev = {v:k for k, v in self.datarate.items()}
+        self.txpower = { 0:20 , 1:14 , 2:11 , 3:8 , 4:5 , 5:2 }
+        self.rx1dr = {
+            0: [ 0 , 0 , 0 , 0 , 0 , 0 ],
+            1: [ 1 , 0 , 0 , 0 , 0 , 0 ],
+            2: [ 2 , 1 , 0 , 0 , 0 , 0 ],
+            3: [ 3 , 2 , 1 , 0 , 0 , 0 ],
+            4: [ 4 , 3 , 2 , 1 , 0 , 0 ],
+            5: [ 5 , 4 , 3 , 2 , 1 , 0 ],
+            6: [ 6 , 5 , 4 , 3 , 2 , 1 ],
+            7: [ 7 , 6 , 5 , 4 , 3 , 2 ],
+        }
+        self.rx1droffset = 0
+        self.receive_delay = {1: 1, 2: 2}
+        self.join_accept_delay = {1: 1, 2: 2}
+        self.max_fcnt_gap = 16384
+        self.maxpayloadlen = { 
+            0: 59,
+            1: 59,
+            2: 59,
+            3:123,
+            4:250,
+            5:250,
+            6:250,
+            7:250,
+        }
+        self.maxappdatalen = {
+            0: 51,
+            1: 51,
+            2: 51,
+            3:115,
+            4:242,
+            5:242,
+            6:242,
+            7:242
+        }
+
+    def _rx2receive(self):
+        """Get second receive window parameters
+        RX2 (second receive window) settings uses a fixed data
+        rate and frequency. Default parameters are 869.525Mhz / DR0
+        Returns:
+            A dict of RX2 frequency, datarate string, datarate index
+        """
+        rxindex = 0
+        return {'freq': 869.525, 'datr': self.datarate[rxindex],
+                'index': rxindex}
+

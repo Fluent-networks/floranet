@@ -13,7 +13,7 @@ from twistar.registry import Registry
 from lora_gateway import LoraInterface, GatewayMessage, Txpk
 from lora_mac import MACMessage, MACDataDownlinkMessage, JoinAcceptMessage
 from lora_mac import MACCommand, LinkCheckAns, LinkADRReq
-from lora_bands import AU915, US915
+from lora_bands import AU915, US915, EU868
 from lora_crypto import aesEncrypt
 from device import Device
 from util import txsleep, euiString, devaddrString, intPackBytes, intUnpackBytes

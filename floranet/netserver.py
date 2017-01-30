@@ -3,7 +3,6 @@ import imp
 import os
 import time
 
-
 from twisted.internet import reactor, task, protocol
 from twisted.internet.error import CannotListenError
 from twisted.internet.defer import inlineCallbacks, returnValue
@@ -81,8 +80,9 @@ class NetServer(protocol.DatagramProtocol):
         # 1. ADR Requests
         self.task['processADRRequests'] = task.LoopingCall(
             self._processADRRequests)
-        self.task['processADRRequests'].start(
-            self.config.adrcycletime)
+        if self.config.adrenable:
+            self.task['processADRRequests'].start(
+                self.config.adrcycletime)
         
         # 2. Message cache
         self.task['cleanMessageCache'] = task.LoopingCall(
@@ -91,9 +91,9 @@ class NetServer(protocol.DatagramProtocol):
             max(10, self.config.duplicateperiod*2))
 
         # 3. MAC Command queue
-        if self.config.macqueuing:
-            self.task['manageMACCommandQueue'] = task.LoopingCall(
+        self.task['manageMACCommandQueue'] = task.LoopingCall(
                 self._manageMACCommandQueue)
+        if self.config.macqueuing:
             self.task['manageMACCommandQueue'].start(
                 self.config.macqueuelimit/2)
         
@@ -278,14 +278,10 @@ class NetServer(protocol.DatagramProtocol):
         
         This method is called every adrcycletime seconds as a looping task.
         
-        """
-        # Check ADR is enabled
-        if not self.config.adrenable:
-            returnValue()
-            
+        """            
         # If we are running, return
         if self.adrprocessing is True:
-            returnValue()
+            returnValue(None)
         
         self.adrprocessing = True
         

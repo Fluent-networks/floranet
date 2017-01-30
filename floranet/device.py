@@ -77,7 +77,7 @@ class Device(DBObject):
             yield self.save()
     
     def resetFrameCount(self):
-        """Reset frame count paramters
+        """Reset frame count parameters
         
         """
         self.fcntup = 0

@@ -1,8 +1,14 @@
 # Change Log
 
+## [0.3.3] - 2017-01-03
+### Changed
+- Update README
+- Revert default.cfg
+
 ## [0.3.2] - 2017-01-31
 ### Added
 - Initial support for EU868 MHz band
+
 ### Fixed
 - Bug fix: If adrenable is set to false, each call to NetServer \_processADRRequests throws a TypeError exception, as no argument is passed to ReturnValue(). NetServer start() method will now not start the LoopingCall if adrenable is false.
 

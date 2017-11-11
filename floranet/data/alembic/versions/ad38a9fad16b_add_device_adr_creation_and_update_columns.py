@@ -20,7 +20,7 @@ def upgrade():
     op.add_column('devices',
         sa.Column('snr_pointer', sa.Integer(), nullable=True))
     op.add_column('devices',
-        sa.Column('snr_average', sa.Float, nullable=True))    
+        sa.Column('snr_average', sa.Float(), nullable=True))    
     op.add_column('devices',
         sa.Column('snr1', sa.Float(), nullable=True))
     op.add_column('devices',

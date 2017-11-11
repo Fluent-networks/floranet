@@ -1,19 +1,26 @@
 
 import struct
+import socket
 from twisted.internet import reactor
 from twisted.internet.defer import Deferred
 
 def txsleep(secs):
-        d = Deferred()
-        reactor.callLater(secs, d.callback, None)
-        return d
+    """Simulate a reactor sleep
     
-def intHexString(n, length):
+    Args:
+        secs (float): time to sleep
+    """
+    d = Deferred()
+    reactor.callLater(secs, d.callback, None)
+    return d
+    
+def intHexString(n, length, sep=4):
     """Convert an integer to a dotted hex representation.
     
     Args:
         n (int): integer to convert
         length (int): number of hex bytes
+        sep (int): dot seperator length
     
     Returns:
         The hex string representation.
@@ -21,15 +28,24 @@ def intHexString(n, length):
     hstr = ''
     hlen = length * 2
     hexs = format(int(n), '0' + str(hlen) + 'x')
-    for i in range(0, hlen, 2):
-        hstr += hexs[i:i+2] + ':' if i < (hlen-2) else hexs[i:i+2]        
+    for i in range(0, hlen, sep):
+        hstr += hexs[i:i+sep] + '.' if i < (hlen-sep) else hexs[i:i+sep]        
     return hstr
+
+def hexStringInt(h):
+    """Convert a hex string representation to int.
+    
+    Args:
+        h (str): hex string to convert
+    """
+    istr = '0x' + h.translate(None, '.')
+    return int(istr, 16)
 
 def euiString(eui):
     """Convert a Lora EUI to string hex representation.
     
     Args:
-        euibin (int): an 8 byte Lora EUI.
+        eui (int): an 8 byte Lora EUI.
     
     Returns:
         The hex string representation.
@@ -98,5 +114,25 @@ def bytesInt128(data):
     intval = 0 | a << 64 | b
     return intval
     
+def validIPv4Address(address):
+    try:
+        socket.inet_pton(socket.AF_INET, address)
+    except AttributeError:  # no inet_pton here, sorry
+        try:
+            socket.inet_aton(address)
+        except socket.error:
+            return False
+        return address.count('.') == 3
+    except socket.error:  # not a valid address
+        return False
 
-    
+    return True
+
+def validIPv6Address(address):
+    try:
+        socket.inet_pton(socket.AF_INET6, address)
+    except socket.error:  # not a valid address
+        return False
+    return True
+
+

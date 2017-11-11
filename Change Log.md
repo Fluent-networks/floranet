@@ -1,5 +1,12 @@
 # Change Log
 
+## [0.4.0] - 2017-11-11
+- Major upgrade to support cloud-based application interfaces - Azure IoT Hub
+- Created application properties, enabling efficient transfer of upstream application message data 
+- Added the stand-alone command line configuration tool: floracmd
+- REST API
+- LoRaWAN Overview, Setup Guide, and Reference Network documentation added in the Wiki.
+
 ## [0.3.3] - 2017-01-03
 ### Changed
 - Update README

@@ -10,7 +10,10 @@ Base = declarative_base()
 class Device(Base):
     __tablename__ = 'devices'
     id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String, nullable=False)
+    otaa = Column(Boolean, nullable=False)
     deveui = Column(Numeric, nullable=False, unique=True)
+    devclass = Column(String, nullable=False)
     devaddr = Column(Integer, nullable=False)
     appeui = Column(Numeric, nullable=False)
     nwkskey = Column(Numeric, nullable=False)
@@ -20,9 +23,9 @@ class Device(Base):
     gw_addr = Column(String, nullable=True)
     fcntup = Column(Integer, nullable=False, default=0)
     fcntdown = Column(Integer, nullable=False, default=0)
+    fcnterror = Column(Boolean, nullable=False, default=False)
     created = Column(DateTime(timezone=True), nullable=False)
     updated = Column(DateTime(timezone=True), nullable=False)
-    fcnterror = Column(Boolean, nullable=False, default=False)
     
     @classmethod
     def seed(cls, session):
@@ -31,10 +34,17 @@ class Device(Base):
         with open('devices.csv') as sfile:
             reader = csv.DictReader(sfile)
             for line in reader:
-                # Convert data using literal_eval
+                # Convert data
                 d = {}
                 for k,v in line.iteritems():
-                    d[k] = ast.literal_eval(v) if v else ''
+                    if k in {'name', 'devclass'}:
+                        d[k] = v
+                        continue
+                    elif k in {'devaddr', 'nwkskey', 'appskey'} and v == '':
+                        d[k] = None
+                        continue
+                    else:
+                        d[k] = ast.literal_eval(v) if v else ''
                 devices.append(d)
         # Set timestamps as UTC
         for d in devices:

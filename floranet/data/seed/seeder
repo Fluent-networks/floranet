@@ -6,6 +6,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from devices import Device
+from gateways import Gateway
+from applications import Application
 
 # Create the enginer
 engine = create_engine('postgresql://postgres:postgres@localhost/floranet')
@@ -14,7 +16,7 @@ engine = create_engine('postgresql://postgres:postgres@localhost/floranet')
 Session = sessionmaker(bind=engine)
 session = Session()
 
-classes = (Device,)
+classes = (Device, Gateway, Application)
 
 def seed():
     print "Seeding the database..."

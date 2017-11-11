@@ -1,13 +1,9 @@
-from twisted.internet.defer import inlineCallbacks, Deferred, returnValue
+from twisted.internet.defer import inlineCallbacks, returnValue
 from twisted.internet import reactor
 
-return_value = None
+from mock_reactor import reactorCall
 
-@inlineCallbacks
-def reactorCall(args):
-    d = Deferred()
-    reactor.callLater(0, d.callback, args)
-    yield d
+return_value = None
 
 @inlineCallbacks
 def all(*args, **kwargs):
@@ -18,7 +14,7 @@ def all(*args, **kwargs):
     """
     yield reactorCall(args)
     returnValue(return_value)
-
+    
 @inlineCallbacks
 def findSuccess(*args, **kwargs):
     """DBObject.find(limit=1) mock. Mocks successful find.

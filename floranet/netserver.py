@@ -9,49 +9,111 @@ from twisted.internet.defer import inlineCallbacks, returnValue
 from twisted.enterprise import adbapi
 from twistar.registry import Registry
 
-from lora_gateway import LoraInterface, GatewayMessage, Txpk
-from lora_mac import MACMessage, MACDataDownlinkMessage, JoinAcceptMessage
-from lora_mac import MACCommand, LinkCheckAns, LinkADRReq
-from lora_bands import AU915, US915, EU868
-from lora_crypto import aesEncrypt
-from device import Device
-from util import txsleep, euiString, devaddrString, intPackBytes, intUnpackBytes
-from log import log
+from floranet.models.config import Config
+from floranet.models.device import Device
+from floranet.models.application import Application
+from floranet.imanager import interfaceManager
 
-class NetServer(protocol.DatagramProtocol):
+from floranet.lora.wan import LoraWAN, GatewayMessage, Txpk
+from floranet.lora.mac import (MACMessage, MACDataDownlinkMessage, JoinAcceptMessage,
+      MACCommand, LinkCheckAns, LinkADRReq)
+from floranet.lora.bands import AU915, US915, EU868
+from floranet.lora.crypto import aesEncrypt
+from floranet.web.webserver import WebServer
+from floranet.util import txsleep, euiString, devaddrString, intPackBytes, intUnpackBytes
+from floranet.log import log
+
+class NetServer(object):
     """LoRa network server
     
     Attributes:
-        config (Configuration): the server configuration object
-        protocol (dict): dictionary of protocol interfaces
-        message_cache (list): Timestamped message MICs used for de-duplication
+        config (Configuration): Configuration object
+        message_cache (list): Timestamped MICs used for de-duplication
         otagrange (set): Collection set of OTA addresses
         task (dict): Dictionary of scheduled tasks
         commands (dict): Dictionary of queued downlink MAC Commands
         adrprocessing (bool): ADR processing flag
-        band: (US915 or AU915): Frequency band object
+        band (Band): Frequency band object
 
     """
     def __init__(self, config):
         """NetServer initialisation method.
         
         Args:
-            config (Configuration): The parsed configuration object
+            database (Database): Database configuration object
         
         """
         log.info("Initialising the server")
-        self.config = config
-        self.protocol = {'lora': LoraInterface(self)}
         self.message_cache = []
-        self.otarange = set(xrange(self.config.otaastart, self.config.otaaend + 1))
         self.task = {}
         self.commands = []
         self.adrprocessing = False
+        
+        self.config = config
+        self.otarange = set(xrange(self.config.otaastart,
+                                   self.config.otaaend + 1))
         self.band = eval(self.config.freqband)()
-        # Establish database connection
-        (driver, host, user, password, database) = self.config.database
-        Registry.DBPOOL = adbapi.ConnectionPool(driver, host=host,
-                  user=user, password=password, database=database)
+
+    def reload(self, config):
+        """Reload a new system configuration
+        
+        Args:
+            config (Config): A validated system configuration
+            
+        """
+        def changed(*args):
+            for p in args:
+                if getattr(self.config, p) != getattr(config, p):
+                    return True
+            return False
+        
+        if changed('port', 'listen'):
+            try:
+                self.lora.restart()
+            except CannotListenError:
+                return (False, "Error restarting the LoraWAN server: "
+                        "cannot listen.")
+        
+        elif changed('webport'):
+            try:
+                self.webserver.restart()
+            except CannotListenError:
+                return (False, "Error restarting the web server: "
+                        "cannot listen.")
+        
+        elif changed('adrenable', 'adrcycletime'):
+            # if ADR is enabled, restart the task
+            if config.adrenable:
+                if self.task['processADRRequests'].running:
+                    self.task['processADRRequests'].stop()
+                self.task['processADRRequests'].start(
+                    config.adrcycletime)
+            # If ADR processing is disabled, stop the task
+            else:
+                if self.task['processADRRequests'].running:
+                    self.task['processADRRequests'].stop()
+            
+        elif changed('otaastart', 'otaaend'):
+            self.otarange = set(xrange(config.otaastart,
+                                   config.otaaend + 1))
+        
+        elif changed('macqueueing', 'macqueuelimit'):
+            if config.macqueueing:
+                if self.task['manageMACCommandQueue'].running:
+                    self.task['manageMACCommandQueue'].stop()
+                self.task['manageMACCommandQueue'].start(
+                    config.macqueuelimit/2)
+            else:
+                if self.task['manageMACCommandQueue'].running:
+                    self.task['manageMACCommandQueue'].stop()
+                
+        elif changed('freqband'):
+            self.band = eval(config.freqband)()
+            
+        self.config = config
+        
+        return(True, '')
+        
         
     def start(self):
         """Start the netserver.
@@ -60,21 +122,6 @@ class NetServer(protocol.DatagramProtocol):
         interfaces.
         """
         log.info("Starting the server")
-        
-        # Test the database connection. Currently we only support postgres.
-        (driver, host, user, password, database) = self.config.database
-        if driver == 'psycopg2':
-            import psycopg2
-            try:
-                connection = psycopg2.connect(host=host,
-                      user=user, password=password, database=database)
-                connection.close()
-            except psycopg2.OperationalError:
-                log.error("Error connecting to database {database} on "
-                          "host '{host}', user '{user}'. Check the database "
-                          "and user credentials.",
-                          database=database, host=host, user=user)
-                exit(1)
         
         # Setup scheduled tasks
         # 1. ADR Requests
@@ -93,58 +140,38 @@ class NetServer(protocol.DatagramProtocol):
         # 3. MAC Command queue
         self.task['manageMACCommandQueue'] = task.LoopingCall(
                 self._manageMACCommandQueue)
-        if self.config.macqueuing:
+        if self.config.macqueueing:
             self.task['manageMACCommandQueue'].start(
                 self.config.macqueuelimit/2)
-        
-        # Start network interfaces:
-        # LoRa gateway interface
+
+        # Start the web server
+        log.info("Starting the web server")
+        self.webserver = WebServer(self)
         try:
-            reactor.listenUDP(self.config.port, self.protocol['lora'],
-                          interface=self.config.listen)
+            self.webserver.start()
+        except CannotListenError:
+            log.error("Error starting the web server: cannot listen.")
+            reactor.stop()
+                    
+        # Start server network interfaces:
+        # LoRa gateway interface
+        log.info("Starting the LoRaWAN interface")
+        self.lora = LoraWAN(self)
+        try:
+            self.lora.start()
         except CannotListenError:
             log.error("Error opening LoRa interface UDP port {port}",
                           port=self.config.port)
-            exit(1)
+            reactor.stop()
 
-        # Application server interfaces
-        log.info("Loading application server interfaces")
-        for app in self.config.apps:
-            (app.modname, app.proto, app.listen, app.port) = \
-                (app.appserver[0], app.appserver[1],
-                 app.appserver[2], app.appserver[3])
-            self.protocol[app.name] = self._loadAppServerInterface(app.modname)
-            if self.protocol[app.name] is None:
-                log.error("Could not load module '{appmodule}' "
-                          "for application {appname}",
-                          appmodule=app.modname, appname=app.name)
-                exit(1)
-            if app.proto == 'tcp':
-                reactor.listenTCP(app.port, self.protocol[app.name],
-                          interface=app.listen)
-            elif app.proto == 'udp':
-                reactor.listenUDP(app.port, self.protocol[app.name],
-                          interface=app.listen)
-        # Fire up the reactor
-        reactor.run()
-
-    def _loadAppServerInterface(self, name):
-        """Load an application server interface
+        # Application interfaces
+        interfaceManager.start(self)
         
-        Args:
-            name (str): name of the appserver interface module
-        
-        Returns:
-            The loaded appserver interface on success, None otherwise.
-        """
-        fpath = os.path.dirname(os.path.realpath(__file__)) + \
-            os.sep + 'appserver' + os.sep + name + '.py'
-        try:
-            module = imp.load_source(name, fpath)
-            interface = module.AppServerInterface(self)
-        except (IOError, ImportError):
-            return None
-        return interface
+    def checkDevaddr(self, devaddr):
+        """Check an address is within the configured network"""
+        x = devaddr >> 25
+        y = self.config.netid & 0x7F
+        return x == y
     
     @inlineCallbacks
     def _getOTAADevAddrs(self):
@@ -192,38 +219,7 @@ class NetServer(protocol.DatagramProtocol):
         # Search active device for devaddr
         device = yield Device.find(where=['devaddr = ?', devaddr], limit=1)
         returnValue(device)
-    
-    @inlineCallbacks
-    def _addActiveDevice(self, device):
-        """Adds the given Device object to the active device list.
         
-        Args:
-            device (Device): A device object to add.
-        
-        Returns:
-            Active device object if successful, None otherwise.
-        """
-        # Check if the device is currently active: search by deveui
-        active = yield Device.find(where=['deveui = ?', device.deveui], limit=1)
-        
-        # Existing device: copy appeui and keys, reset frame count parameters, save and return
-        if active is not None:
-            for attr in ('appeui', 'nwkskey', 'appskey'):
-                setattr(active, attr, getattr(device, attr))
-            active.resetFrameCount()
-            yield active.save()
-            returnValue(active)
-            
-        # New device: allocate the next OTA devaddr
-        device.devaddr = yield self._getFreeOTAAddress()
-        if device.devaddr is None:
-            log.info("Could not allocate an OTA address for join request "
-                    "from {deveui}.", deveui=euiString(device.deveui))
-            returnValue(None)
-        device.resetFrameCount()
-        yield device.save()
-        returnValue(device)
-    
     def _checkDuplicateMessage(self, message):
         """Checks for duplicate gateway messages.
         
@@ -278,7 +274,7 @@ class NetServer(protocol.DatagramProtocol):
         
         This method is called every adrcycletime seconds as a looping task.
         
-        """            
+        """        
         # If we are running, return
         if self.adrprocessing is True:
             returnValue(None)
@@ -288,11 +284,19 @@ class NetServer(protocol.DatagramProtocol):
         devices = yield Device.all()
         sendtime = time.time()
         
-        for device in devices:            
+        for device in devices:
+            # Check this device is enabled
+            if not device.enabled:
+                continue
+            
+            # Check ADR is enabled
+            if not device.adr:
+                continue
+            
             # Set the target data rate 
             target = device.getADRDatarate(self.band, self.config.adrmargin)
             
-            # If no target, or the target data rate is being used, continue
+            # If no target, or the current data rate is the target, continue
             if target is None:
                 continue
             
@@ -300,12 +304,13 @@ class NetServer(protocol.DatagramProtocol):
             yield device.update(adr_datr=target)
             
             # Only send a request if we need to change
-            if device.adr_datr == target:
+            if device.tx_datr == device.adr_datr:
                 continue
             
             # If we are queueing commands, create the command and add to the queue.
             # Replace any existing requests.
-            if self.config.macqueuing:
+            if self.config.macqueueing:
+                log.info("Queuing ADR MAC Command")
                 command = self._createLinkADRRequest(device)
                 self._dequeueMACCommand(device.deveui, command)
                 self._queueMACCommand(device.deveui, command)
@@ -318,7 +323,7 @@ class NetServer(protocol.DatagramProtocol):
                 yield txsleep(scheduled - current)            
 
             # Refresh and send the LinkADRRequest
-            sendtime = time.time()         
+            sendtime = time.time()    
             yield self._sendLinkADRRequest(device)
             
         self.adrprocessing = False
@@ -377,9 +382,8 @@ class NetServer(protocol.DatagramProtocol):
         """Calculate the timestamp for downlink transmission
         
         Args:
-            tmst (int): value of the gateway time counter when the
-                        frame was received (us precision).
-            offset (int): number of seconds to add to tmst
+            tmst (int): Gateway time counter of the received frame
+            offset (int): Number of seconds to add to tmst
         
         Returns:
             int: scheduled value of gateway time counter
@@ -394,9 +398,10 @@ class NetServer(protocol.DatagramProtocol):
         """Create Txpk object
         
         Args:
-            device (Device): Device object
-            rx (dict): RX1 and Rx2 parameters (delay, freq, index)
-            data (str): Data payload.
+            device (Device): Target device
+            data (str): Data payload
+            gateway (Gateway): Target gateway
+            itmst (int): Gateway time counter of the received frame
             immediate (bool): Immediate transmission if true, otherwise
                               scheduled
         
@@ -432,46 +437,80 @@ class NetServer(protocol.DatagramProtocol):
         for rxpk in request.rxpk:        
             # Decode the MAC message
             message = MACMessage.decode(rxpk.data)
-            # TODO
+            
+            # Check if thisis a duplicate message
             if self._checkDuplicateMessage(message):
                 returnValue(False)
             
             # Join Request
-            if message.isJoinRequest():
+            if message.isJoinRequest():                
                 # Get the application using appeui
-                app = next((a for a in self.config.apps if
-                            a.appeui == message.appeui), None)
+                app = yield Application.find(where=['appeui = ?', message.appeui], limit=1)
+                #app = next((a for a in self.applications if
+                #            a.appeui == message.appeui), None)
                 if app is None:
                     log.info("Message from {deveui} - AppEUI {appeui} "
                         "does not match any configured applications.",
                         deveui=euiString(message.deveui),
                                          appeui=message.appeui)
                     returnValue(False)
-                # Create a new Device, tx parameters and gateway address
-                device = Device(deveui=message.deveui, tx_chan=rxpk.chan,
-                                tx_datr=rxpk.datr, gw_addr=request.remote[0])
-                # If join request is successful, send a join response
-                device = yield self._processJoinRequest(message, app, device)
-                if device:
-                    # Save and update the ADR measures
-                    yield device.save()
+                    
+                # Find the Device
+                device = yield Device.find(where=['deveui = ?', message.deveui], limit=1)
+                if device is None:
+                    log.info("Message from unregistered device {deveui}",
+                         deveui=euiString(message.deveui))
+                    returnValue(False)
+                    
+                # Check the device is enabled
+                if not device.enabled:
+                    log.info("Join request for disabled device {deveui}.",
+                         deveui=euiString(device.deveui))
+                    returnValue(False)
+                
+                # Process join request
+                joined = yield self._processJoinRequest(message, app, device)
+                if joined:
+                    # Update the ADR measures
                     if self.config.adrenable:
                         device.updateSNR(rxpk.lsnr)
+
+                    yield device.update(tx_chan=rxpk.chan, tx_datr=rxpk.datr,
+                                        devaddr=device.devaddr, nwkskey=device.nwkskey,
+                                        appskey=device.appskey,
+                                        time=rxpk.time, tmst=rxpk.tmst,
+                                        gw_addr=gateway.host,
+                                        fcntup=0, fcntdown=0,
+                                        fcnterror=False,
+                                        devnonce=device.devnonce,
+                                        snr=device.snr,
+                                        snr_average=device.snr_average)
+
                     log.info("Successful Join request from DevEUI {deveui} "
                             "for AppEUI {appeui} | Assigned address {devaddr}",
                             deveui=euiString(device.deveui),
                             appeui=euiString(app.appeui),
                             devaddr=devaddrString(device.devaddr))
+                    
+                    # Send the join response
                     self._sendJoinResponse(request, rxpk, gateway, app, device)
                     returnValue(True)
                 else:
+                    log.info("Could not process join request from device "
+                          "{deveui}.", deveui=euiString(device.deveui))
                     returnValue(False)
             
-            # Check this is an active device                  
+            # LoRa message. Check this is a registered device                
             device = yield self._getActiveDevice(message.payload.fhdr.devaddr)
-            
             if device is None:
-                log.info("Message from unregistered address {devaddr}",
+                log.info("Message from device using unregistered address "
+                         "{devaddr}",
+                         devaddr=devaddrString(message.payload.fhdr.devaddr))
+                returnValue(False)
+                
+            # Check the device is enabled
+            if not device.enabled:
+                log.info("Message from disabled device {devaddr}",
                          devaddr=devaddrString(message.payload.fhdr.devaddr))
                 returnValue(False)
 
@@ -480,7 +519,8 @@ class NetServer(protocol.DatagramProtocol):
                                          self.config.fcrelaxed):
                 log.info("Message from {devaddr} failed frame count check.",
                         devaddr=devaddrString(message.payload.fhdr.devaddr))
-                yield device.save()
+                yield device.update(fcntup=device.fcntup, fcntdown=device.fcntdown,
+                                    fcnterror=device.fcnterror)
                 returnValue(False)
 
             # Perform message integrity check.
@@ -490,19 +530,26 @@ class NetServer(protocol.DatagramProtocol):
                         devaddr=devaddrString(message.payload.fhdr.devaddr))
                 returnValue(False)
 
-            # Set the device rx window parameters, remote, gateway and update SNR reading
-            device.tx_datr = rxpk.datr
-            device.rx = self.band.rxparams((device.tx_chan, device.tx_datr), join=False)
-            device.remote = request.remote
-            device.gw_addr = gateway.host
+            # Update SNR reading and device
             device.updateSNR(rxpk.lsnr)
-            yield device.save()
+            yield device.update(tx_chan=rxpk.chan, tx_datr=rxpk.datr,
+                                fcntup=device.fcntup, fcntdown=device.fcntdown,
+                                fcnterror=device.fcnterror,
+                                time=rxpk.time, tmst=rxpk.tmst,
+                                adr=bool(message.payload.fhdr.adr),
+                                snr=device.snr, snr_average=device.snr_average,
+                                gw_addr=gateway.host)
+            
+            # Set the device rx window parameters
+            device.rx = self.band.rxparams((device.tx_chan, device.tx_datr), join=False)
             
             # Process MAC Commands
             commands = []
+            # Standalone MAC command
             if message.isMACCommand():
                 message.decrypt(device.nwkskey)
                 commands = [MACCommand.decode(message.payload.frmpayload)]
+            # Contains piggybacked MAC command(s)
             elif message.hasMACCommands():
                 commands = message.commands
                 
@@ -515,40 +562,48 @@ class NetServer(protocol.DatagramProtocol):
                 
             # Process application data message
             if message.isUnconfirmedDataUp() or message.isConfirmedDataUp():
-                confirmed = message.isConfirmedDataUp()
                 # Find the app
-                app = next((a for a in self.config.apps if a.appeui ==
-                            device.appeui), None)
+                app = yield Application.find(where=['appeui = ?', device.appeui], limit=1)
                 if app is None:
                     log.info("Message from {devaddr} - AppEUI {appeui} "
                         "does not match any configured applications.",
                         devaddr=euiString(device.devaddr), appeui=device.appeui)
                     returnValue(False)
+                    
                 # Decrypt frmpayload
                 message.decrypt(device.appskey)
                 appdata = str(message.payload.frmpayload)
-                
-                # Save the device state and route the data to an application
-                # server via the configured interface
+                port = message.payload.fport
+                                    
+                # Route the data to an application server via the configured interface
                 log.info("Outbound message from devaddr {devaddr}",
                          devaddr=devaddrString(device.devaddr))
-                self._outboundAppMessage(app, int(device.devaddr),
-                                               appdata,
-                                               confirmed)
+                interface = interfaceManager.getInterface(app.appinterface_id)
+                if interface is None:
+                    log.error("No outbound interface found for application "
+                              "{app}", app=app.name)
+                elif not interface.started:
+                    log.error("Outbound interface for application "
+                              "{app} is not started", app=app.name)
+                else:
+                    self._outboundAppMessage(interface, device, app, port, appdata)
+                
+                # Send an ACK if required
+                if message.isConfirmedDataUp():
+                    yield self.inboundAppMessage(device.devaddr, '', acknowledge=True)
     
-    def _outboundAppMessage(self, app, devaddr, appdata, confirmed):
+    def _outboundAppMessage(self, interface, device, app, port, appdata):
         """Sends application data to the application interface"""
-        self.protocol[app.name].netServerReceived(devaddr, appdata,
-                                                  confirmed)
+        interface.netServerReceived(device, app, port, appdata)
     
     @inlineCallbacks
-    def inboundAppMessage(self, devaddr, appdata, confirmed):
+    def inboundAppMessage(self, devaddr, appdata, acknowledge=False):
         """Sends inbound data from the application interface to the device
         
         Args:
             devaddr (int): 32 bit device address (DevAddr)
             appdata (str): packed application data
-            confirmed (bool): Confirmed or unconfirmed message
+            acknowledge (bool): Acknowledged message
         """
         
         log.info("Inbound message to devaddr {devaddr}",
@@ -557,72 +612,80 @@ class NetServer(protocol.DatagramProtocol):
         # Retrieve the active device
         device = yield self._getActiveDevice(devaddr)
         if device is None:
-            log.info("Cannot send to unregistered device address {devaddr}",
+            log.error("Cannot send to unregistered device address {devaddr}",
                      devaddr=devaddrString(devaddr))
             returnValue(None)
 
-        # Find the associated application
-        app = next((a for a in self.config.apps
-                    if a.appeui == device.appeui), None)
+        # Check the device is enabled
+        if not device.enabled:
+            log.error("Inbound application message for disabled device "
+                     "{deveui}", deveui=euiString(device.deveui))
+            returnValue(None)
+            
+        # Get the associated application
+        app = yield Application.find(where=['appeui = ?', device.appeui], limit=1)
         if app is None:
-            log.info("Inbound application message for {devaddr} - "
+            log.error("Inbound application message for {deveui} - "
                 "AppEUI {appeui} does not match any configured applications.",
-                devaddr=euiString(device.devaddr), appeui=device.appeui)
+                deveui=euiString(device.deveui), appeui=device.appeui)
             returnValue(None)
         
         # Find the gateway
-        gateway = self.protocol['lora'].configuredGateway(device.gw_addr)
+        gateway = self.lora.gateway(device.gw_addr)
         if gateway is None:
-            log.info("Could not find gateway for inbound message to "
-                     "{devaddr}.", devaddr=euiString(device.devaddr))
+            log.error("Could not find gateway for inbound message to "
+                     "{devaddr}.", devaddr=devaddrString(device.devaddr))
             returnValue(None)
 
         # Increment fcntdown
         fcntdown = device.fcntdown + 1
-        # Create the downlink message, encrypt with AppSKey and encode
-        
-        # Piggyback queued MAC messages in fopts 
+                
+        # Piggyback any queued MAC messages in fopts 
         fopts = ''
         device.rx = self.band.rxparams((device.tx_chan, device.tx_datr), join=False)
-        if self.config.macqueuing:
+        if self.config.macqueueing:
             # Get all of this device's queued commands: this returns a list of tuples (index, command)
             commands = [(i,c[2]) for i,c in enumerate(self.commands) if device.deveui == c[1]]
             for (index, command) in commands:
-                # Check if we can accommodate the command. If so, encode and remove form the queue
+                # Check if we can accommodate the command. If so, encode and remove from the queue
                 if self.band.checkAppPayloadLen(device.rx[1]['datr'], len(fopts) + len(appdata)):
                     fopts += command.encode()
                     del self.commands[index]
                 else:
                     break
         
+        # Create the downlink message, encrypt with AppSKey and encode
         response = MACDataDownlinkMessage(device.devaddr,
                                           device.nwkskey,
                                           device.fcntdown,
                                           self.config.adrenable,
                                           fopts, int(app.fport), appdata,
-                                          confirmed=confirmed)
+                                          acknowledge=acknowledge)
         response.encrypt(device.appskey)
         data = response.encode()
         
         # Create Txpk objects
-        txpk = self._txpkResponse(device, data, gateway, immediate=True)
+        txpk = self._txpkResponse(device, data, gateway, itmst=int(device.tmst),
+                                  immediate=False)
         request = GatewayMessage(gatewayEUI=gateway.eui, remote=(gateway.host,
                                          gateway.port))
         
-        # Save the device
+        # Save the frame count down
         device.update(fcntdown=fcntdown)
 
         # Send RX1 window message
-        self.protocol['lora'].sendPullResponse(request, txpk[1])
-        # Send RX2 window message
-        self.protocol['lora'].sendPullResponse(request, txpk[2])
-        
+        self.lora.sendPullResponse(request, txpk[1])
+        # If Class A, send the RX2 window message
+        self.lora.sendPullResponse(request, txpk[2])
+    
+    @inlineCallbacks
     def _processJoinRequest(self, message, app, device):
         """Process an OTA Join Request message from a LoraWAN device
         
-        This method checks the message integrity code (MIC). If the MIC
-        is valid, we have a valid join request, and we can create the session
-        keys and add the device to the active OTA device list.
+        This method checks the message devnonce and integrity code (MIC).
+        If the devnonce has not been seen before, and the MIC is valid,
+        we have a valid join request, and we can create the session
+        keys and assign an OTA device address.
         
         Args:
             message (JoinRequestMessage): The join request message object
@@ -630,26 +693,30 @@ class NetServer(protocol.DatagramProtocol):
             device (Device): The requesting device object
             
         Returns:
-            Device object on success, None otherwise.
+            True on success, False otherwise.
         """
+        # Perform devnonce check
+        if not device.checkDevNonce(message):
+            log.info("Join request message from {deveui} failed message "
+                    "devnonce check.", deveui=euiString(message.deveui))
+            returnValue(False)
+            
         # Perform message integrity check.
         if not message.checkMIC(app.appkey):
             log.info("Message from {deveui} failed message "
                     "integrity check.", deveui=euiString(message.deveui))
-            return None
+            returnValue(False)
         
         # Assign DevEUI, NwkSkey and AppSKey.
         device.appeui = app.appeui
         device.nwkskey = self._createSessionKey(1, app, message)
         device.appskey = self._createSessionKey(2, app, message)
         
-        # Add the device to the active list
-        device = self._addActiveDevice(device)
-        if device is None:
-            self.log.info("Could not activate device {deveui}.",
-                          deveui=euiString(device.deveui))
-            return None
-        return device
+        # If required, obtain a OTA devaddr for the device
+        if device.devaddr is None:
+            device.devaddr = yield self._getFreeOTAAddress()
+            
+        returnValue(device.devaddr is not None)
     
     def _sendJoinResponse(self, request, rxpk, gateway, app, device):
         """Send a join response message
@@ -676,9 +743,9 @@ class NetServer(protocol.DatagramProtocol):
         
         txpk = self._txpkResponse(device, data, gateway, rxpk.tmst)
         # Send the RX1 window messages
-        self.protocol['lora'].sendPullResponse(request, txpk[1])
+        self.lora.sendPullResponse(request, txpk[1])
         # Send the RX2 window message
-        self.protocol['lora'].sendPullResponse(request, txpk[2])
+        self.lora.sendPullResponse(request, txpk[2])
         
     def _processLinkCheckReq(self, device, command, request, lsnr):
         """Process a link check request
@@ -699,7 +766,7 @@ class NetServer(protocol.DatagramProtocol):
         command = LinkCheckAns(margin=margin, gwcnt=gwcnt)
         
         # Queue the command if required 
-        if self.config.macqueuing:
+        if self.config.macqueueing:
             self._queueMACCommand(device.deveui, command)
             return
             
@@ -713,16 +780,16 @@ class NetServer(protocol.DatagramProtocol):
                                           fcntdown,
                                           self.config.adrenable,
                                           '', 0, frmpayload,
-                                          confirmed=True)
+                                          acknowledge=True)
         message.encrypt(device.nwkskey)
         data = message.encode()
         
-        gateway = self.protocol['lora'].configuredGateway(device.gw_addr)
+        gateway = self.lora.gateway(device.gw_addr)
         if gateway is None:
             log.info("Could not find gateway for gateway {gw_addr} for device "
                      "{devaddr}", gw_addr=device.gw_addr,
                      devaddr=devaddrString(device.devaddr))
-            returnValue(None)
+            return
         
         # Create GatewayMessage and Txpk objects, send immediately
         request = GatewayMessage(version=1, token=0, remote=(gateway.host, gateway.port))
@@ -733,7 +800,7 @@ class NetServer(protocol.DatagramProtocol):
         device.update(fcntdown=fcntdown)
         
         # Send the RX2 window message
-        self.protocol['lora'].sendPullResponse(request, txpk[2])
+        self.lora.sendPullResponse(request, txpk[2])
     
     def _createLinkADRRequest(self, device):
         """Create a Link ADR Request message
@@ -775,7 +842,7 @@ class NetServer(protocol.DatagramProtocol):
         message.encrypt(device.nwkskey)
         data = message.encode()
         
-        gateway = self.protocol['lora'].configuredGateway(device.gw_addr)
+        gateway = self.lora.gateway(device.gw_addr)
         if gateway is None:
             log.info("Could not find gateway for gateway {gw_addr} for device "
                      "{devaddr}", gw_addr=device.gw_addr,
@@ -791,7 +858,7 @@ class NetServer(protocol.DatagramProtocol):
         device.update(fcntdown=fcntdown)
         
         # Send the RX2 window message
-        self.protocol['lora'].sendPullResponse(request, txpk[2])
+        self.lora.sendPullResponse(request, txpk[2])
         
     def _processLinkADRAns(self, device, command):
         """Process a link ADR answer

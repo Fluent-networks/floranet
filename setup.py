@@ -18,6 +18,6 @@ setup(name='floranet',
                           'crochet>=1.6.0', 'click>=6.7', 'click_shell>=1.0',
                           'mock>=2.0.0'],
       dependency_links = ['https://github.com/doegox/python-cryptoplus/tarball/master#egg=CryptoPlus-1.0'],
-      scripts = ['bin/floranet', 'bin/floracmd'],
+      scripts = ['cmd/floranet', 'cmd/floracmd'],
     )
 

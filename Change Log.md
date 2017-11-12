@@ -1,5 +1,11 @@
 # Change Log
 
+## [0.4.2] - 2017-11-12
+- Change bin folder to cmd
+
+## [0.4.1] - 2017-11-12
+- Alter .gitignore
+
 ## [0.4.0] - 2017-11-11
 - Major upgrade to support cloud-based application interfaces - Azure IoT Hub
 - Created application properties, enabling efficient transfer of upstream application message data 

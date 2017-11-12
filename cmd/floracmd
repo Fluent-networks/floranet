@@ -1,0 +1,42 @@
+#!/usr/bin/env python
+
+import os
+
+import click
+import click_shell
+
+from floranet.commands.system import system
+from floranet.commands.app import app
+from floranet.commands.interface import interface
+from floranet.commands.property import property
+from floranet.commands.gateway import gateway
+from floranet.commands.device import device
+
+@click.option('--server', '-s',
+              default='localhost:8000',
+              envvar='FLORANET_SERVER',
+              help='Floranet server [host:port].')
+@click.option('--token', '-t',
+              default='',
+              envvar='FLORANET_TOKEN',
+              help='Floranet API token.')
+
+@click_shell.shell(prompt='floranet> ')
+@click.pass_context
+
+def cli(ctx, server, token):
+    ctx.obj['server'] = server
+    ctx.obj['token'] = token
+    click.echo('Using floranet server {}'.format(server))
+
+cli.add_command(system)
+cli.add_command(app)
+cli.add_command(interface)
+cli.add_command(property)
+cli.add_command(gateway)
+cli.add_command(device)
+
+if __name__ == '__main__':
+    cli(obj={})
+    
+    

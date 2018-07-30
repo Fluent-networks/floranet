@@ -6,6 +6,7 @@ from twisted.internet.defer import inlineCallbacks, returnValue
 from crochet import wait_for, TimeoutError
 
 from floranet.models.application import Application
+from floranet.imanager import interfaceManager
 from floranet.models.device import Device
 from floranet.util import euiString, intHexString
 from floranet.log import log
@@ -54,7 +55,7 @@ class ApplicationResource(Resource):
         self.parser.add_argument('appnonce', type=int)
         self.parser.add_argument('appkey', type=int)
         self.parser.add_argument('fport', type=int)
-        self.parser.add_argument('appinterface_id', type=int)
+        self.parser.add_argument('interface', type=int)
         self.args = self.parser.parse_args()
     
     @inlineCallbacks
@@ -120,6 +121,9 @@ class RestApplication(ApplicationResource):
                 abort(404, message={'error': "Application {} doesn't exist."
                                     .format(euiString(appeui))})
             
+            self.args['appinterface_id'] = self.args.pop('interface')
+            current_appif = app.appinterface_id
+            
             kwargs = {}
             for a,v in self.args.items():
                 if v is not None and v != getattr(app, a):
@@ -132,6 +136,8 @@ class RestApplication(ApplicationResource):
             # Update the model
             if kwargs:
                 app.update(**kwargs)
+            if current_appif != app.appinterface_id:
+                yield interfaceManager.checkInterface(current_appif)
             returnValue(({}, 200))
 
         except TimeoutError:

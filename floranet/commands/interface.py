@@ -35,6 +35,10 @@ def show(ctx, id):
         for i,a in sorted(data.iteritems()):
             if a['type'] == 'AzureIotHttps':
                 a['type'] = 'Azure HTTPS'
+            elif a['type'] == 'AzureIotMqtt':
+                a['type'] = 'Azure MQTT'
+            elif a['type'] == 'FileTextStore':
+                a['type'] = 'Text File'
             click.echo('{:3}'.format(a['id']) + ' ' + \
                        '{:23}'.format(a['name']) +  ' ' + \
                        '{:14}'.format(a['type']))
@@ -45,10 +49,16 @@ def show(ctx, id):
     indent = ' ' * 10
     started = 'Started' if i['started'] else 'Stopped'
     
-    if i['type'] == 'Reflector':        
+    if i['type'] == 'Reflector':
         click.echo('{}name: {}'.format(indent, i['name']))
         click.echo('{}type: {}'.format(indent, i['type']))
         click.echo('{}status: {}'.format(indent, started))
+    
+    elif i['type'] == 'FileTextStore':
+        click.echo('{}name: {}'.format(indent, i['name']))
+        click.echo('{}type: {}'.format(indent, i['type']))
+        click.echo('{}status: {}'.format(indent, started))
+        click.echo('{}file: {}'.format(indent, i['file']))
         
     elif i['type'] == 'AzureIotHttps':
         protocol = 'HTTPS'
@@ -60,6 +70,13 @@ def show(ctx, id):
                    format(indent, i['poll_interval']))
         click.echo('{}status: {}'.format(indent, started))
         
+    elif i['type'] == 'AzureIotMqtt':
+        protocol = 'MQTT'
+        click.echo('{}name: {}'.format(indent, i['name']))
+        click.echo('{}protocol: {}'.format(indent, protocol))
+        click.echo('{}key name: {}'.format(indent, i['keyname']))
+        click.echo('{}key value: {}'.format(indent, i['keyvalue']))
+        click.echo('{}status: {}'.format(indent, started))
     return
         
 @interface.command(context_settings=dict(
@@ -78,7 +95,7 @@ def add(ctx, type):
     args = dict(item.split('=', 1) for item in ctx.args)
     
     iftype = type.lower()
-    types = {'reflector', 'azure'}
+    types = {'reflector', 'azure', 'filetext'}
     
     # Check for required args
     if not iftype in types:
@@ -86,11 +103,16 @@ def add(ctx, type):
         return
     
     required = {'reflector': ['name'],
+                'filetext': ['name', 'file'],
                 'azure': ['protocol', 'name' , 'iothost', 'keyname',
-                          'keyvalue', 'pollinterval']
+                          'keyvalue']
                 }
     
     missing = [item for item in required[iftype] if item not in args.keys()]
+    
+    if type == 'azure' and 'protocol' == 'https' and not 'pollinterval' in args.keys():
+        missing.append('pollinterval')
+    
     if missing:
         if len(missing) == 1:
             click.echo("Missing argument " + missing[0])
@@ -114,7 +136,7 @@ def add(ctx, type):
 @click.argument('id')
 @click.pass_context
 def set(ctx, id):
-    """modify an interface.
+    """Modify an interface.
     
     Args:
         ctx (Context): Click context

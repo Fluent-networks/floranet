@@ -19,5 +19,11 @@ class AppInterface(Model):
     TABLENAME = 'appinterfaces'
     BELONGSTO = [{'name': 'interfaces', 'polymorphic': True}]
 
-
+    @inlineCallbacks
+    def apps(self):
+        """Flags whether this interface has any associated Applications
+        
+        """
+        apps = yield Application.find(where=['appinterface_id = ?', self.appinterface.id])
+        returnValue(apps)
 

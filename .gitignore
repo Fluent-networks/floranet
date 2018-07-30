@@ -191,6 +191,9 @@ $RECYCLE.BIN/
 #############
 *.py[co]
 
+# Virtual environment
+venv/
+
 # Packages
 *.egg
 *.egg-info

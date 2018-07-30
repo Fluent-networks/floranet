@@ -38,5 +38,5 @@ cli.add_command(device)
 
 if __name__ == '__main__':
     cli(obj={})
-    
+
     

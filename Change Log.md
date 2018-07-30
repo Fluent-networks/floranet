@@ -1,5 +1,8 @@
 # Change Log
 
+## [0.4.3] - 2018-07-30
+- Add Azure MQTT and Text File interfaces
+
 ## [0.4.2] - 2017-11-12
 - Change bin folder to cmd
 

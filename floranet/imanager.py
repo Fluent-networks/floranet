@@ -1,6 +1,7 @@
 from twisted.internet.defer import inlineCallbacks, returnValue
 
 from floranet.models.appinterface import AppInterface
+from floranet.models.application import Application
 from floranet.log import log
 
 class InterfaceManager(object):
@@ -44,7 +45,11 @@ class InterfaceManager(object):
                         "id {id}", id=interface.appinterface.id)
 
     def getInterface(self, appinterface_id):
-        """Retrieve an interface by application interface id"""
+        """Retrieve an interface by application interface id
+        
+        Args:
+            appinterface_id (int): Application interface id
+        """
         
         interface = next((i for i in self.interfaces if
                 i.appinterface.id == int(appinterface_id)), None)
@@ -57,6 +62,22 @@ class InterfaceManager(object):
             return None
         return self.interfaces
 
+    @inlineCallbacks
+    def checkInterface(self, appinterface_id):
+        """Check the referenced interface is required to be active.
+        
+        Args:
+            appinterface_id (int): Application interface id
+        """
+        interface = self.getInterface(appinterface_id)
+        if interface is None:
+            returnValue(None)
+            
+        active = yield interface.apps()
+        if active is None:
+            interface.stop()
+        
+        
     @inlineCallbacks
     def createInterface(self, interface):
         """Add an interface to the interface list"
@@ -91,7 +112,6 @@ class InterfaceManager(object):
         """Update an existing interface
         
         Args:
-            appinterface (AppInterface): The Appinterface object
             interface: The concrete application interface
         """
         

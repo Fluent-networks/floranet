@@ -7,6 +7,8 @@ from crochet import wait_for, TimeoutError
 
 from floranet.models.appinterface import AppInterface
 from floranet.appserver.azure_iot_https import AzureIotHttps
+from floranet.appserver.azure_iot_mqtt import AzureIotMqtt
+from floranet.appserver.file_text_store import FileTextStore
 from floranet.appserver.reflector import Reflector
 from floranet.imanager import interfaceManager
 from floranet.util import euiString, intHexString
@@ -37,6 +39,7 @@ class AppInterfaceResource(Resource):
         self.parser = reqparse.RequestParser(bundle_errors=True)
         self.parser.add_argument('type', type=str)
         self.parser.add_argument('name', type=str)
+        self.parser.add_argument('file', type=str)
         self.parser.add_argument('protocol', type=str)
         self.parser.add_argument('iothost', type=str)
         self.parser.add_argument('keyname', type=str)
@@ -171,7 +174,6 @@ class RestAppInterfaces(AppInterfaceResource):
         except TimeoutError:
             log.error("REST API timeout retrieving application interfaces")
 
-
     @login_required
     @wait_for(timeout=TIMEOUT)
     @inlineCallbacks
@@ -188,33 +190,45 @@ class RestAppInterfaces(AppInterfaceResource):
                 protocol = self.args['protocol']
                 iothost = self.args['iothost']
                 keyname = self.args['keyname']
-                keyvalue = self.args['keyvalue']
+                keyvalue = self.args['keyvalue']                
                 poll_interval = self.args['pollinterval']
             
                 # Check for required args
                 required = {'type', 'name', 'protocol', 'iothost',
-                            'keyname', 'keyvalue', 'pollinterval'}
+                            'keyname', 'keyvalue'}
+                for r in required:
+                    if self.args[r] is None:
+                        message[r] = "Missing the {} parameter.".format(r)
+                if protocol == 'https' and poll_interval is None:
+                    message['poll_interval'] = "Missing the poll_interval parameter."
+                if message:
+                    abort(400, message=message)
+                
+                # Check protocol type
+                if not protocol in {'https', 'mqtt'}:
+                    message = "Unknown protocol type {}.".format(protocol)
+                    abort(400, message=message)
+                                
+                # Create the interface
+                if protocol == 'https':
+                    interface = AzureIotHttps(name=name, iothost=iothost, keyname=keyname,
+                                      keyvalue=keyvalue, poll_interval=poll_interval)
+                elif protocol == 'mqtt':
+                    interface = AzureIotMqtt(name=name, iothost=iothost, keyname=keyname,
+                                      keyvalue=keyvalue)
+            
+            elif klass == 'filetext':
+                file = self.args['file']
+                required = {'type', 'name', 'file'}
                 for r in required:
                     if self.args[r] is None:
                         message[r] = "Missing the {} parameter.".format(r)
                 if message:
                     abort(400, message=message)
                 
-                if protocol != 'https':
-                    message = "Unknown protocol type {}.".format(protocol)
-                    abort(400, message=message)
-                    
-                # Check this interface does not currently exist
-                exists = yield AzureIotHttps.exists(where=['name = ?', name])
-                if exists:
-                    message = {'error': "Azure Https Interface {} currently exists"
-                               .format(name)}
-                    abort(400, message=message)
-            
                 # Create the interface
-                interface = AzureIotHttps(name=name, iothost=iothost, keyname=keyname,
-                                  keyvalue=keyvalue, poll_interval=poll_interval)
-            
+                interface = FileTextStore(name=name, file=file)
+                
             elif klass == 'reflector':
                 
                 # Required args

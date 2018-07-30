@@ -11,6 +11,8 @@ from floranet.models.appinterface import AppInterface
 from floranet.models.appproperty import AppProperty
 from floranet.appserver.reflector import Reflector
 from floranet.appserver.azure_iot_https import AzureIotHttps
+from floranet.appserver.azure_iot_mqtt import AzureIotMqtt
+from floranet.appserver.file_text_store import FileTextStore
 from floranet.log import log
 
 class Option(object):
@@ -81,7 +83,8 @@ class Database(object):
         # Application, AppInterface and AppProperty
         Registry.register(Application, AppInterface, AppProperty)
         # AppInterface and the concrete classes
-        Registry.register(Reflector, AzureIotHttps, AppInterface)
+        Registry.register(Reflector, FileTextStore, AzureIotHttps, AzureIotMqtt,
+                          AppInterface)
 
     def _getOption(self, section, option, obj):
         """Parse options for the section

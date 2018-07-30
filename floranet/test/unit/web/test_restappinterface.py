@@ -154,7 +154,7 @@ class RestAppInterfacesTest(unittest.TestCase):
     @inlineCallbacks
     def setUp(self):
         
-        # Twistar requirem
+        # Twistar setup
         Registry.getConfig =  MagicMock(return_value=None)
         db = Database()
         db.register()
@@ -230,15 +230,6 @@ class RestAppInterfacesTest(unittest.TestCase):
             args['name'] = None
             yield self.assertFailure(resource.post(), e.BadRequest)
             args['name'] = interface.name
-
-        # Interface exists - raises 400 BadRequest
-        with patch.object(reqparse.RequestParser, 'parse_args',
-                          MagicMock(return_value=args)), \
-                patch.object(AzureIotHttps, 'exists',
-                             MagicMock(return_value=True)):
-            resource = RestAppInterfaces(restapi=self.restapi,
-                                        server=self.server)
-            yield self.assertFailure(resource.post(), e.BadRequest)
             
         # Invalid interface - raises 400 BadRequest
         with patch.object(reqparse.RequestParser, 'parse_args',

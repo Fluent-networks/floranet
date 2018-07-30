@@ -109,6 +109,11 @@ class AzureIotHttps(AzureIot):
         
         returnValue(True)
         yield
+    
+    def active(self):
+        """Return active status"""
+        
+        return self.started
         
     def stop(self):
         """Stop the application interface"""
@@ -132,6 +137,9 @@ class AzureIotHttps(AzureIot):
             appdata (str): Application data
         """
         
+        if not self.started:
+            returnValue(None)
+        
         # Map the device name the Azure IOT deviceId
         devid = device.appname if device.appname else device.name
         
@@ -142,7 +150,7 @@ class AzureIotHttps(AzureIot):
         if prop is None:
             data = appdata
         else:
-            # Create the Azure message. If not mapped, transparently send appdata
+            # Create the Azure message.
             data = self._azureMessage(devid, prop, appdata)
             if data is None:
                 log.debug("Application interface {name} could not create "

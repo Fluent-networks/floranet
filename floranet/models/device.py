@@ -131,11 +131,11 @@ class Device(Model):
             True if fcntup is within the limit, otherwise False.
         
         """
-        # Relxed mode. If fcntup = 1 then set fcntdown to zero
-        # and the device fntup to 1.
-        if relaxed and fcntup == 1:
+        # Relxed mode. If fcntup <=1 then set fcntdown to zero
+        # and the device fcntup to match.
+        if relaxed and fcntup <= 1:
             self.fcntdown = 0
-            self.fcntup = 1
+            self.fcntup = fcntcup
             self.fcnterror = False
         elif fcntup > (self.fcntup + maxfcntgap):
             self.fcnterror = True

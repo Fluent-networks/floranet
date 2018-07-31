@@ -1,5 +1,8 @@
 # Change Log
 
+## [0.4.4] - 2018-07-31
+- Enable relaxed frame count to accept fcntup as 0 or 1
+
 ## [0.4.3] - 2018-07-30
 - Add Azure MQTT and Text File interfaces
 

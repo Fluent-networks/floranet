@@ -519,6 +519,8 @@ class NetServer(object):
                                          self.config.fcrelaxed):
                 log.info("Message from {devaddr} failed frame count check.",
                         devaddr=devaddrString(message.payload.fhdr.devaddr))
+                log.debug("Received frame count {fcnt}, device frame count {dfcnt}",
+                          fcnt=message.payload.fhdr.fcnt, dfcnt=device.fcntup)
                 yield device.update(fcntup=device.fcntup, fcntdown=device.fcntdown,
                                     fcnterror=device.fcnterror)
                 returnValue(False)

@@ -136,6 +136,8 @@ class RestApplication(ApplicationResource):
             # Update the model
             if kwargs:
                 app.update(**kwargs)
+            
+            # Check the interface being removed.
             if current_appif != app.appinterface_id:
                 yield interfaceManager.checkInterface(current_appif)
             returnValue(({}, 200))

@@ -3,7 +3,7 @@
 from setuptools import setup, find_packages
 
 setup(name='floranet',
-      version = '0.4.0',
+      version = '0.4.5',
       description = 'LoRa Network Server',
       author = 'Frank Edwards',
       author_email = 'frank.edwards@fluentnetworks.com.au',

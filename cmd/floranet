@@ -3,6 +3,7 @@
 import argparse
 import os
 import sys
+import pkg_resources
 
 from twisted.internet import reactor
 from twisted.internet.defer import inlineCallbacks, returnValue
@@ -56,6 +57,8 @@ if __name__ == '__main__':
     if not log.start(options.foreground, options.logfile, options.debug):
         exit(1)
 
+    version = pkg_resources.require('Floranet')[0].version
+    log.info("Floranet version {version}", version=version)
     log.info("Starting up")
     
     # Load the database configuration

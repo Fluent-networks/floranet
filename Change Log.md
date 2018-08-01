@@ -1,18 +1,30 @@
 # Change Log
 
+## [0.4.5] - 2018-08-01
+### Fixed
+- Fix exception being thrown on change of application interface
+
+### Added
+- Add version info message on startup
+
 ## [0.4.4] - 2018-07-31
+### Changed
 - Enable relaxed frame count to accept fcntup as 0 or 1
 
 ## [0.4.3] - 2018-07-30
+### Added
 - Add Azure MQTT and Text File interfaces
 
 ## [0.4.2] - 2017-11-12
+### Changed
 - Change bin folder to cmd
 
 ## [0.4.1] - 2017-11-12
+### Changed
 - Alter .gitignore
 
 ## [0.4.0] - 2017-11-11
+### Added
 - Major upgrade to support cloud-based application interfaces - Azure IoT Hub
 - Created application properties, enabling efficient transfer of upstream application message data 
 - Added the stand-alone command line configuration tool: floracmd

@@ -72,8 +72,10 @@ class InterfaceManager(object):
         interface = self.getInterface(appinterface_id)
         if interface is None:
             returnValue(None)
-            
-        active = yield interface.apps()
+        
+        # If there are no associated applications, stop the interface.
+        active = yield Application.find(where=['appinterface_id = ?', appinterface_id])
+        #active = yield interface.apps()
         if active is None:
             interface.stop()
         

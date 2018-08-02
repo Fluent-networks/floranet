@@ -1,5 +1,9 @@
 # Change Log
 
+## [0.4.6] - 2018-08-02
+### Fixed
+- Bug fix for device frame count check.
+
 ## [0.4.5] - 2018-08-01
 ### Fixed
 - Fix exception being thrown on change of application interface

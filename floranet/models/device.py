@@ -135,7 +135,7 @@ class Device(Model):
         # and the device fcntup to match.
         if relaxed and fcntup <= 1:
             self.fcntdown = 0
-            self.fcntup = fcntcup
+            self.fcntup = fcntup
             self.fcnterror = False
         elif fcntup > (self.fcntup + maxfcntgap):
             self.fcnterror = True

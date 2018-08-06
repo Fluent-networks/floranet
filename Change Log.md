@@ -1,5 +1,9 @@
 # Change Log
 
+## [0.4.7] - 2018-08-06
+### Fixed
+- Bug fix: When decrypting messages, we were adding an unnecessary padding byte when dealing with frame payloads that are an integer multiple of 16.
+
 ## [0.4.6] - 2018-08-02
 ### Fixed
 - Bug fix for device frame count check.

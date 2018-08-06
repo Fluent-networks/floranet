@@ -75,6 +75,8 @@ def intPackBytes(n, length, endian='big'):
     Returns:
         A packed binary string.
     """
+    if length == 0:
+        return ''
     h = '%x' % n
     s = ('0'*(len(h) % 2) + h).zfill(length*2).decode('hex')
     if endian == 'big':

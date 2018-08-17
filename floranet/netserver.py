@@ -437,6 +437,11 @@ class NetServer(object):
         for rxpk in request.rxpk:        
             # Decode the MAC message
             message = MACMessage.decode(rxpk.data)
+            if message is None:
+                log.info("MAC message decode error for gateway {gateway}: message "                        
+                        "timestamp {timestamp}", gateway=gateway.host,
+                        timestamp=str(rxpk.time))
+                returnValue(False)
             
             # Check if thisis a duplicate message
             if self._checkDuplicateMessage(message):

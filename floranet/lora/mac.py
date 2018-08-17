@@ -255,6 +255,8 @@ class MACMessage(object):
             return JoinRequestMessage.decode(mhdr, data)
         elif mhdr.mtype == UN_DATA_UP or mhdr.mtype == CO_DATA_UP:
             return MACDataUplinkMessage.decode(mhdr, data)
+        else:
+            return None
 
     def isJoinRequest(self):
         """Check if message is a Join Request.

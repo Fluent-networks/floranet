@@ -1,5 +1,9 @@
 # Change Log
 
+## [0.4.8] - 2018-08-17
+### Fixed
+- Bug fix: Detect and log MAC message decode errors when processing PUSH_DATA messages.
+
 ## [0.4.7] - 2018-08-06
 ### Fixed
 - Bug fix: When decrypting messages, we were adding an unnecessary padding byte when dealing with frame payloads that are an integer multiple of 16.
